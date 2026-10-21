@@ -70,7 +70,10 @@ static int show_list(Store *s, int64_t id) {
                     char date[32]; date_text(sqlite3_column_int64(stmt, i), date); puts(date);
                 } else if (sqlite3_column_type(stmt, i) == SQLITE_INTEGER)
                     printf("%" PRId64 "\n", (int64_t)sqlite3_column_int64(stmt, i));
-                else puts((const char *)sqlite3_column_text(stmt, i));
+                else {
+                    const char *text = (const char *)sqlite3_column_text(stmt, i);
+                    puts(text ? text : "—");
+                }
             }
         }
         int64_t now = (int64_t)time(NULL);

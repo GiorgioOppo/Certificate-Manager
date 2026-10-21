@@ -378,6 +378,24 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(self.rows("SELECT * FROM certificates"), [])
         self.cli("show", cert["id"], success=False)
 
+    def test_cli_show_nullable_renewal_link(self):
+        self.cli("import", self.leaf_old, self.leaf_new)
+        records = self.rows("SELECT id FROM certificates ORDER BY not_after")
+        old_id, new_id = (record["id"] for record in records)
+
+        def replacement_value():
+            details = self.cli("show", old_id).stdout
+            return next(line.split(maxsplit=1)[1] for line in details.splitlines()
+                        if line.startswith("superseded_by "))
+
+        self.assertEqual(replacement_value(), "—")
+        with sqlite3.connect(self.db) as connection:
+            connection.execute("UPDATE certificates SET archived=1,superseded_by=? WHERE id=?",
+                               (new_id, old_id))
+        self.assertEqual(replacement_value(), str(new_id))
+        self.cli("remove", new_id)
+        self.assertEqual(replacement_value(), "—")
+
     def test_cli_bundle_atomicity_and_reminder_history(self):
         self.cli("import", self.malformed, success=False)
         self.assertEqual(self.rows("SELECT * FROM certificates"), [])

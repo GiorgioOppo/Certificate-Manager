@@ -157,7 +157,7 @@ make test
 
 The suite covers certificate parsing, chain reconstruction, reminders, role assignments, renewals, queue behavior, encrypted SMTP settings, migrations, HTTP/CSRF checks, the seven web pages, endpoint verification and background monitoring. Network tests use local TLS/SMTP peers and temporary certificates; they do not require a real SMTP account or contact public HTTPS sites. Node.js is used for interface checks.
 
-The [GitHub Actions workflow](.github/workflows/ci.yml) builds and tests on Ubuntu; its first hosted run will occur after publication. It uses the official [checkout](https://github.com/actions/checkout) and [setup-node](https://github.com/actions/setup-node) actions. See [Contributing](CONTRIBUTING.md) for source layout and [Publishing to GitHub](docs/PUBLISHING.md) for preparation steps.
+The [GitHub Actions workflow](.github/workflows/ci.yml) builds and tests on Ubuntu on each push and pull request. It uses the official [checkout](https://github.com/actions/checkout) and [setup-node](https://github.com/actions/setup-node) actions. See [Contributing](CONTRIBUTING.md) for source layout and [Publishing to GitHub](docs/PUBLISHING.md) for publication steps.
 
 ## License
 

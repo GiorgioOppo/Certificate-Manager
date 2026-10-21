@@ -354,7 +354,7 @@ static void fake_plain_smtp(int listener)
         if (strstr(line, "MAIL FROM") || strstr(line, "DATA")) _exit(7);
         if (!strncmp(line, "QUIT", 4)) {
             const char goodbye[] = "221 Bye\r\n";
-            (void)write(client, goodbye, sizeof goodbye - 1);
+            if (write(client, goodbye, sizeof goodbye - 1) != (ssize_t)(sizeof goodbye - 1)) _exit(8);
         }
     }
     close(client); close(listener);

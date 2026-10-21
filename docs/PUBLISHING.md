@@ -1,8 +1,8 @@
 # Publishing Certificate Manager to GitHub
 
-The repository is prepared for a new project named **Certificate Manager**. A suitable GitHub repository slug is **Certificate-Manager**. The chosen project license is [MIT](../LICENSE).
+The official public repository is [GiorgioOppo/Certificate-Manager](https://github.com/GiorgioOppo/Certificate-Manager), published on the `main` branch under the [MIT license](../LICENSE).
 
-These instructions describe a future publication. Preparing these files does not create a remote repository, upload source or publish a running application. Choose the owning account/organization and visibility before executing publication commands.
+The instructions below document the publication process for maintainers or a separate new repository. Choose the owning account/organization and visibility before executing creation commands. Publishing the source does not publish a running application.
 
 ## Review the local source
 
