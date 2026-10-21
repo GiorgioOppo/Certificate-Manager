@@ -8,9 +8,18 @@ Build the application using the dependencies and commands in [README.md](README.
 - `web/`: shared HTML, CSS, JavaScript and language resources.
 - `scripts/embed_assets.py`: generates the eight page documents and embeds interface assets during the build.
 - `tests/`: C unit tests and Python integration tests.
+- `Dockerfile` and `docker-compose.yml`: multi-stage Linux image and local container deployment with a persistent data volume.
 - `docs/`: workflow explanations in English and Italian, the Italian user guide, translation and publication guidance.
 
-The executable embeds the web interface. Rebuild with `make` after changing web assets and restart the application to load the updated executable. Keep the local-only server model, existing Host/Origin/CSRF protections and strict TLS verification intact.
+The executable embeds the web interface. Rebuild with `make` after changing web assets and restart the application to load the updated executable. Keep the local deployment model, existing Host/Origin/CSRF protections and strict TLS verification intact. The native server defaults to loopback; container use explicitly selects its listener address while Compose publishes only on host loopback. Keep the internal and published ports equal. After container changes, build the image and check startup, HTTP health, non-root execution and data persistence with disposable volumes; never use a production database for these checks.
+
+```sh
+docker compose config --quiet
+docker compose build
+python3 tests/container_smoke.py
+```
+
+The container smoke test requires Docker Compose, Python 3 and the `openssl` command. It creates a unique project and temporary certificates, verifies HTTP protections and background monitoring, then checks a complete volume backup and recreation with the existing SMTP key. It removes only its own disposable containers and volume. GitHub Actions runs it alongside the native build and test job.
 
 ## Changes and review
 

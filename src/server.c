@@ -784,7 +784,10 @@ static void route(int fd, Store *store, const Request *r, const char *token) {
     } else json_error(fd, 405, "Metodo o percorso non supportato.");
 }
 
-int app_serve(Store *store, unsigned short port) {
+int app_serve(Store *store, const char *bind_address, unsigned short port) {
+    if (!bind_address || (strcmp(bind_address, "127.0.0.1") && strcmp(bind_address, "0.0.0.0")) || !port) {
+        fprintf(stderr, "Indirizzo o porta di ascolto non validi.\n"); return 0;
+    }
     unsigned char random[32];
     char token[65];
     if (RAND_bytes(random, sizeof random) != 1) {
@@ -798,14 +801,16 @@ int app_serve(Store *store, unsigned short port) {
     struct sockaddr_in address;
     memset(&address, 0, sizeof address);
     address.sin_family = AF_INET;
-    (void)inet_pton(AF_INET, "127.0.0.1", &address.sin_addr);
+    (void)inet_pton(AF_INET, bind_address, &address.sin_addr);
     address.sin_port = htons(port);
     if (bind(fd, (struct sockaddr *)&address, sizeof address) || listen(fd, 16)) {
-        fprintf(stderr, "Impossibile avviare http://127.0.0.1:%u: %s\n", port, strerror(errno));
+        fprintf(stderr, "Impossibile avviare il listener HTTP %s:%u: %s\n", bind_address, port, strerror(errno));
         close(fd); return 0;
     }
     printf("Gestione certificati: http://127.0.0.1:%u\n"
-           "Controllo scadenze ogni 60 secondi; monitoraggio URL in background. Premi Ctrl+C per terminare.\n", port);
+           "Listener HTTP: %s:%u\n"
+           "Controllo scadenze ogni 60 secondi; monitoraggio URL in background. Premi Ctrl+C per terminare.\n",
+           port, bind_address, port);
     fflush(stdout);
     int64_t next_check = 0;
     int success = 1;

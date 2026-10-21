@@ -1,0 +1,52 @@
+name: certificate-manager
+
+services:
+  certificate-manager:
+    build:
+      context: .
+    image: certificate-manager:local
+    pull_policy: never
+    init: true
+    restart: unless-stopped
+    # Keep browser and server ports identical for Host and Origin validation.
+    command:
+      - --db
+      - /data/certificati.db
+      - serve
+      - --bind
+      - 0.0.0.0
+      - --port
+      - "${CERTIFICATI_PORT:-8080}"
+    ports:
+      - "127.0.0.1:${CERTIFICATI_PORT:-8080}:${CERTIFICATI_PORT:-8080}"
+    volumes:
+      - certificate-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 20s
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - --fail
+        - --silent
+        - --show-error
+        - --noproxy
+        - "*"
+        - --max-time
+        - "4"
+        - --output
+        - /dev/null
+        - "http://127.0.0.1:${CERTIFICATI_PORT:-8080}/workflow"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  certificate-data:

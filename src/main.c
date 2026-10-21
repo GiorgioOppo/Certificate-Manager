@@ -16,7 +16,8 @@ static void stop_app(int sig) {
 static void usage(void) {
     puts("Gestione certificati HTTPS\n"
          "Uso: certificati [--db ARCHIVIO] [comando]\n\n"
-         "  serve [--port PORTA]       Interfaccia web locale (predefinito, porta 8080)\n"
+         "  serve [--bind IP] [--port PORTA]\n"
+         "                            Interfaccia web (predefinito: 127.0.0.1:8080)\n"
          "  import FILE...            Importa certificati PEM, bundle PEM o DER\n"
          "  list                      Tabella delle scadenze\n"
          "  show ID                   Dettagli di un certificato\n"
@@ -24,6 +25,8 @@ static void usage(void) {
          "  check                     Controlla subito le soglie 45, 30, 15, 2 giorni\n"
          "  watch [--interval SEC]    Controllo continuo (predefinito: 60 secondi)\n"
          "  help                      Mostra questa guida\n\n"
+         "Indirizzi di ascolto: 127.0.0.1 (locale), 0.0.0.0 (tutte le interfacce IPv4).\n"
+         "In Docker pubblicare la porta solo su 127.0.0.1, mantenendo la stessa porta interna.\n"
          "Archivio predefinito: certificati.db nella cartella corrente.\n"
          "Il server deve restare acceso per generare i promemoria automatici.");
 }
@@ -105,10 +108,27 @@ int main(int argc, char **argv) {
     int importing = !strcmp(cmd, "import"), listing = !strcmp(cmd, "list");
     int showing = !strcmp(cmd, "show"), removing = !strcmp(cmd, "remove"), checking = !strcmp(cmd, "check");
     int64_t parameter = serving ? 8080 : 60;
-    if (serving || watching) {
+    const char *bind_address = "127.0.0.1";
+    if (serving) {
+        int port_seen = 0, bind_seen = 0;
+        while (arg < argc) {
+            if (argc - arg < 2) { usage(); return 2; }
+            if (!strcmp(argv[arg], "--port") && !port_seen) {
+                port_seen = 1;
+                if (!(parameter = positive_integer(argv[arg + 1], 65535))) { usage(); return 2; }
+            } else if (!strcmp(argv[arg], "--bind") && !bind_seen) {
+                bind_seen = 1;
+                bind_address = argv[arg + 1];
+                if (strcmp(bind_address, "127.0.0.1") && strcmp(bind_address, "0.0.0.0")) {
+                    usage(); return 2;
+                }
+            } else { usage(); return 2; }
+            arg += 2;
+        }
+    } else if (watching) {
         if (arg < argc) {
-            if (argc - arg != 2 || strcmp(argv[arg], serving ? "--port" : "--interval") ||
-                !(parameter = positive_integer(argv[arg + 1], serving ? 65535 : 86400))) {
+            if (argc - arg != 2 || strcmp(argv[arg], "--interval") ||
+                !(parameter = positive_integer(argv[arg + 1], 86400))) {
                 usage(); return 2;
             }
             arg += 2;
@@ -136,7 +156,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "%s\n", error); return 1;
     }
     int ok = 1;
-    if (serving) ok = app_serve(&store, (unsigned short)parameter);
+    if (serving) ok = app_serve(&store, bind_address, (unsigned short)parameter);
     else if (importing) {
         while (arg < argc) {
             int added, duplicates;

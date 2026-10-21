@@ -17,5 +17,5 @@ int app_distribute(Store *store, int64_t id, int *queued, char *error, size_t er
 char *app_state_json(Store *store, const char *token, size_t *length,
                      char *error, size_t error_size);
 void app_json_string(FILE *out, const char *value);
-int app_serve(Store *store, unsigned short port);
+int app_serve(Store *store, const char *bind_address, unsigned short port);
 #endif

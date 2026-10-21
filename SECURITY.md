@@ -2,9 +2,11 @@
 
 ## Intended deployment
 
-Certificate Manager is a local desktop/server utility. Its HTTP interface binds to `127.0.0.1`. It does not implement user authentication, authorization roles, tenant isolation or an HTTPS listener. Host, Origin and CSRF checks protect the local web workflow, but they do not replace user authentication.
+Certificate Manager is a local desktop/server utility. Its HTTP interface binds to `127.0.0.1` by default. The Docker Compose configuration explicitly binds the listener to `0.0.0.0` inside the container and publishes its port only on the host’s `127.0.0.1`; keep that host restriction. It does not implement user authentication, authorization roles, tenant isolation or an HTTPS listener. Host, Origin and CSRF checks protect the local web workflow, but they do not replace user authentication.
 
 Do not expose the HTTP interface directly to an untrusted network. A deployment for other users needs an independently reviewed access-control design, authenticated reverse proxy, TLS termination and compatible origin/host handling. A proxy alone does not make the current local-only design a supported multi-user service.
+
+The container runs as UID/GID `10001:10001`, drops Linux capabilities, disallows privilege escalation and uses a read-only root filesystem. Its writable named volume contains both the database and SMTP encryption key; container isolation does not protect these files from a Docker administrator. Protect volume backups and retain ownership and key permissions on restoration. Removing the volume destroys stored data.
 
 Endpoint verification and monitoring create outbound network connections to the destinations selected in the interface. Limit access to the application accordingly; this behavior is intended for trusted local operators.
 

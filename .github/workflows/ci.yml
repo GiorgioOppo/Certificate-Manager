@@ -30,3 +30,18 @@ jobs:
         run: node --check web/app.js
       - name: Build and run tests
         run: make test
+
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Validate Docker Compose
+        run: docker compose config --quiet
+      - name: Build container image
+        run: docker compose build --pull
+      - name: Verify container and persistent data
+        run: python3 tests/container_smoke.py

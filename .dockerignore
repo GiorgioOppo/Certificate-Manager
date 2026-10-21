@@ -1,0 +1,23 @@
+# Send only build inputs. Runtime data, credentials, Git history, backups and
+# temporary test fixtures never enter the build context or either image stage.
+**
+!Dockerfile
+!Makefile
+!src/
+!src/*.c
+!src/*.h
+!scripts/
+!scripts/embed_assets.py
+!web/
+!web/index.html
+!web/app.css
+!web/app.js
+!web/i18n.js
+!web/server-messages.json
+!web/locales/
+!web/locales/it.json
+!web/locales/en.json
+!web/locales/fr.json
+!web/locales/es.json
+!web/locales/zh-CN.json
+!web/locales/ja.json

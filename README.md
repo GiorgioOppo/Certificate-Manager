@@ -18,7 +18,7 @@ A local HTTPS certificate registry written in C, with a multilingual web interfa
 - Configure SMTP in the interface, test TLS and authentication without sending messages, inspect `.eml` previews, and pause or enable delivery.
 - Use the interface in **English, Italian, French, Spanish, Simplified Chinese or Japanese**.
 
-This is a local application. The HTTP server binds to **127.0.0.1** and has no user authentication or access roles. Publishing the source on GitHub does not make it a hosted service. See [Security](SECURITY.md) before considering network exposure.
+This is a local application. The HTTP server binds to **127.0.0.1** by default; Docker Compose publishes it only on the host’s loopback address. It has no user authentication or access roles. Publishing the source on GitHub does not make it a hosted service. See [Security](SECURITY.md) before considering network exposure.
 
 ## Workflow
 
@@ -92,6 +92,52 @@ To choose another database or port:
 ```
 
 The database's parent directory must already exist. The executable and command names remain `certificati` for compatibility.
+
+## Run with Docker Compose
+
+Install Docker Engine with the [Compose plugin](https://docs.docker.com/compose/gettingstarted/), or Docker Desktop, then run these commands from the cloned project directory:
+
+```sh
+docker compose up --build -d
+docker compose logs -f certificate-manager
+```
+
+Open [http://127.0.0.1:8080](http://127.0.0.1:8080). If the native application already occupies port 8080, start the container on another port:
+
+```sh
+CERTIFICATI_PORT=8081 docker compose up --build -d
+```
+
+Then open [http://127.0.0.1:8081](http://127.0.0.1:8081). Use the same `CERTIFICATI_PORT` value whenever rebuilding or recreating the service. Compose uses that port both inside the container and on the host so the interface’s Host/Origin checks remain consistent.
+
+The multi-stage Dockerfile builds the executable and runs it as an unprivileged user (UID/GID `10001:10001`). The runtime root filesystem is read-only, with a temporary `/tmp` and persistent `/data`. The `certificate-data` named volume stores `/data/certificati.db` and its `.smtp.key` together. A first container starts with an empty registry: it does not automatically import the database used by the native application.
+
+```sh
+# Rebuild and apply source updates, keeping the existing data volume.
+docker compose up --build -d
+
+# Stop and remove the container and network, keeping its data volume.
+docker compose down
+```
+
+Set `CERTIFICATI_PORT` on the update command as above if using a different port. `docker compose stop` also preserves data. **`docker compose down -v` deletes the volume and all registry data**; use it only when deliberately discarding the installation.
+
+Configure SMTP from **Email queue** as usual. Inside the container, `localhost` refers to the container itself; use an SMTP hostname reachable from its network. For private CA files, add a read-only mount and the appropriate `CERTIFICATI_TLS_CA_FILE` or `CERTIFICATI_SMTP_CA_FILE` variable to the service; see [HTTPS checks](#https-checks-and-periodic-monitoring) and [SMTP configuration](#smtp-configuration).
+
+The listener uses `0.0.0.0` inside the container so Docker can reach it, while Compose publishes the port on **127.0.0.1 only**. Keep this host binding: the interface still has no user authentication. See [Security](SECURITY.md).
+
+### Back up container data
+
+Stop the service before archiving its complete volume, including the database and SMTP encryption key:
+
+```sh
+docker compose stop certificate-manager
+umask 077
+docker compose run -T --rm --no-deps --entrypoint /bin/sh certificate-manager -c 'tar -C /data -czf - .' > certificate-manager-backup.tar.gz
+docker compose start certificate-manager
+```
+
+Keep this archive private. When restoring it, preserve ownership `10001:10001` and mode `0600` on the `.smtp.key` file. Back up before upgrades; never add the archive to Git.
 
 ## Web pages and languages
 

@@ -34,6 +34,7 @@ test: certificati build/test_reminders build/test_delivery
 	./build/test_reminders
 	./build/test_delivery
 	$(PYTHON) tests/integration.py
+	$(PYTHON) tests/network_integration.py
 	$(PYTHON) tests/remote_integration.py
 	$(PYTHON) tests/monitor_integration.py
 	$(PYTHON) tests/ui_pages.py

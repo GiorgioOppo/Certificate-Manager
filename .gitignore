@@ -21,6 +21,7 @@
 *.key
 *.p12
 *.pfx
+certificate-manager-backup*.tar.gz
 # Local runtime and editor artifacts
 *.log
 *.o

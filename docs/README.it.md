@@ -8,7 +8,7 @@ La pagina **Coda email** consente di configurare SMTP, verificare la connessione
 
 L’interfaccia è disponibile in **inglese, italiano, francese, spagnolo, cinese semplificato e giapponese**. Scegli la lingua dal selettore nell’interfaccia. I dati dei certificati, i nomi dei referenti e gli altri contenuti inseriti dall’utente mantengono la propria forma originale. I comandi da terminale e i testi dei messaggi email generati rimangono in italiano.
 
-Il progetto usa la licenza **MIT** ed è predisposto per la pubblicazione del codice sorgente su GitHub come **Certificate Manager**. Il server resta uno strumento locale senza autenticazione utenti: ascolta su `127.0.0.1` e non è pronto per l’esposizione diretta in rete. Vedi [SECURITY.md](../SECURITY.md) e la [guida alla pubblicazione](PUBLISHING.md).
+Il progetto usa la licenza **MIT** ed è predisposto per la pubblicazione del codice sorgente su GitHub come **Certificate Manager**. Il server resta uno strumento locale senza autenticazione utenti: per impostazione predefinita ascolta su `127.0.0.1`; Docker Compose pubblica la porta soltanto sull’indirizzo locale del computer. Non è pronto per l’esposizione diretta in rete. Vedi [SECURITY.md](../SECURITY.md) e la [guida alla pubblicazione](PUBLISHING.md).
 
 ## Workflow
 
@@ -43,7 +43,7 @@ brew install curl
 PKG_CONFIG_PATH="$(brew --prefix curl)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" make
 ```
 
-Apri [http://127.0.0.1:8080](http://127.0.0.1:8080) e carica i file `.pem`, `.crt`, `.cer` o `.der`, anche più file insieme. Il formato viene riconosciuto dal contenuto; il limite è 16 MiB per file. Il server ascolta esclusivamente su `127.0.0.1`.
+Apri [http://127.0.0.1:8080](http://127.0.0.1:8080) e carica i file `.pem`, `.crt`, `.cer` o `.der`, anche più file insieme. Il formato viene riconosciuto dal contenuto; il limite è 16 MiB per file. Il server nativo ascolta su `127.0.0.1` per impostazione predefinita.
 
 Per scegliere un altro archivio o un'altra porta:
 
@@ -52,6 +52,52 @@ Per scegliere un altro archivio o un'altra porta:
 ```
 
 L'archivio predefinito è `certificati.db` nella cartella da cui avvii il programma. Le cartelle del percorso scelto devono già esistere. I dati rimangono disponibili dopo il riavvio. Premi `Ctrl+C` nel terminale per arrestare il programma.
+
+## Avvio con Docker Compose
+
+Installa Docker Engine con il [plugin Compose](https://docs.docker.com/compose/gettingstarted/) oppure Docker Desktop. Dalla cartella del progetto clonato esegui:
+
+```sh
+docker compose up --build -d
+docker compose logs -f certificate-manager
+```
+
+Apri [http://127.0.0.1:8080](http://127.0.0.1:8080). Se il programma nativo sta già usando la porta 8080, avvia il container su un’altra porta:
+
+```sh
+CERTIFICATI_PORT=8081 docker compose up --build -d
+```
+
+In questo caso apri [http://127.0.0.1:8081](http://127.0.0.1:8081). Usa lo stesso valore di `CERTIFICATI_PORT` quando ricompili o ricrei il servizio. Compose mantiene uguale la porta interna e quella del computer per rispettare i controlli Host/Origin dell’interfaccia.
+
+Il Dockerfile compila il programma in uno stadio dedicato e lo esegue con utente senza privilegi, UID/GID `10001:10001`. Il filesystem del container è in sola lettura, con `/tmp` temporanea e `/data` persistente. Il volume nominato `certificate-data` conserva insieme `/data/certificati.db` e la sua chiave `.smtp.key`. Al primo avvio il registro è vuoto: il database del programma nativo non viene importato automaticamente.
+
+```sh
+# Ricompila e applica gli aggiornamenti, conservando il volume dei dati.
+docker compose up --build -d
+
+# Arresta e rimuove container e rete, conservando il volume dei dati.
+docker compose down
+```
+
+Se usi una porta diversa, indica `CERTIFICATI_PORT` anche nel comando di aggiornamento, come nell’esempio precedente. Anche `docker compose stop` conserva i dati. **`docker compose down -v` elimina il volume e tutti i dati del registro**: usalo soltanto per cancellare intenzionalmente l’installazione.
+
+Configura SMTP dalla pagina **Coda email**. Dentro il container, `localhost` indica il container stesso: usa il nome di un server SMTP raggiungibile dalla sua rete. Per le CA aziendali aggiungi al servizio un mount in sola lettura e la variabile `CERTIFICATI_TLS_CA_FILE` o `CERTIFICATI_SMTP_CA_FILE` appropriata; vedi [verifica HTTPS](#recuperare-un-certificato-da-url-o-cn) e [configurazione SMTP](#coda-email-e-configurazione-smtp).
+
+Il server ascolta su `0.0.0.0` dentro il container per ricevere le connessioni inoltrate da Docker; Compose pubblica la porta **soltanto su 127.0.0.1 del computer**. Mantieni questo indirizzo: l’interfaccia continua a non avere autenticazione utenti. Vedi [SECURITY.md](../SECURITY.md).
+
+### Backup dei dati del container
+
+Arresta il servizio e archivia il volume completo, comprendendo database e chiave della password SMTP:
+
+```sh
+docker compose stop certificate-manager
+umask 077
+docker compose run -T --rm --no-deps --entrypoint /bin/sh certificate-manager -c 'tar -C /data -czf - .' > certificate-manager-backup.tar.gz
+docker compose start certificate-manager
+```
+
+Conserva l’archivio in un luogo privato. In caso di ripristino mantieni proprietario `10001:10001` e permessi `0600` sulla chiave `.smtp.key`. Esegui un backup prima degli aggiornamenti e non aggiungere l’archivio a Git.
 
 ## Navigazione dell’interfaccia
 
