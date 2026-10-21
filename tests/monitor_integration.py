@@ -314,7 +314,7 @@ class MonitorIntegrationTests(unittest.TestCase):
         self.assertEqual(current["last_checked_at"], paused["last_checked_at"])
         self.assertEqual(state["monitor_events"], [])
 
-    def test_renewal_moves_monitor_and_updates_expected_certificate(self):
+    def test_renewal_keeps_previous_until_verified_deployment(self):
         peer = self.peer()
         self.start_application()
         certificate = self.upload_baseline()
@@ -326,16 +326,86 @@ class MonitorIntegrationTests(unittest.TestCase):
         })
         self.assertEqual(status, 200, body)
         new_id = json.loads(body)["certificate_id"]
+        state = self.state()
+        job = next(item for item in state["renewal_jobs"] if item["new_certificate_id"] == new_id)
         current = self.monitor(monitor_id)
+        self.assertEqual(current["certificate_id"], certificate["id"])
+        self.assertEqual(current["revision"], revision)
+        self.assertEqual(remote.normalized_fingerprint(current["expected_fingerprint"]),
+                         remote.normalized_fingerprint(certificate["fingerprint"]))
+        self.assertFalse(next(cert for cert in state["certificates"] if cert["id"] == certificate["id"])["archived"])
+        # Signing a replacement does not install it or invalidate the old peer.
+        state = self.force_check(monitor_id, "ok")
+        self.assertEqual(state["monitor_events"], [])
+        # The authorization covers only the explicitly linked new fingerprint.
+        _, unknown_key, unknown_chain = self.certificates["second"]
+        peer.replace_certificate(unknown_chain, unknown_key)
+        self.force_check(monitor_id, "changed")
+        peer.replace_certificate(self.renewed_chain, self.renewed_key)
+        state = self.force_check(monitor_id, "ok")
+        self.assertIn("recovered", {event["kind"] for event in state["monitor_events"]})
+        self.assertEqual(self.monitor(monitor_id, state)["certificate_id"], certificate["id"])
+        # A fresh installation request is required before closing the renewal.
+        status, _, body = self.form(f"/api/renewal-jobs/{job['id']}/complete", {})
+        self.assertEqual(status, 400, body)
+        status, _, body = self.form(f"/api/renewal-jobs/{job['id']}/check-install", {"monitor_id": monitor_id})
+        self.assertEqual(status, 200, body)
+        self.wait(lambda state: any(endpoint["job_id"] == job["id"] and endpoint["verified_at"]
+                                    for endpoint in state["renewal_endpoints"]))
+        status, _, body = self.form(f"/api/renewal-jobs/{job['id']}/complete", {})
+        self.assertEqual(status, 200, body)
+        state = self.state()
+        current = self.monitor(monitor_id, state)
         self.assertEqual(current["certificate_id"], new_id)
         self.assertGreater(current["revision"], revision)
         self.assertEqual(remote.normalized_fingerprint(current["expected_fingerprint"]),
                          remote.fingerprint(self.renewed.read_text()))
-        # Registration does not install the renewed file on the monitored service.
-        self.wait(lambda state: self.monitor(monitor_id, state)["last_status"] == "changed")
-        peer.replace_certificate(self.renewed_chain, self.renewed_key)
+        self.assertTrue(next(cert for cert in state["certificates"] if cert["id"] == certificate["id"])["archived"])
+
+    def test_configurable_email_alerts_queue_only_new_faults_and_recoveries(self):
+        peer = self.peer()
+        self.start_application()
+        certificate = self.upload_baseline()
+        monitor_id = self.create_monitor(certificate["id"], f"localhost:{peer.port}")
+        state = self.wait(lambda state: self.monitor(monitor_id, state)["last_status"] == "ok")
+        self.assertFalse(self.monitor(monitor_id, state)["email_alerts"])
+        # Existing installations do not suddenly start sending notifications.
+        _, other_key, other_chain = self.certificates["second"]
+        peer.replace_certificate(other_chain, other_key)
+        self.force_check(monitor_id, "changed")
+        self.assertEqual(self.state()["outbox"], [])
+        self.edit_monitor(monitor_id, email_alerts=1,
+                          email_recipients="owner@example.test; tech@example.test\nOWNER@example.test")
+        state = self.state()
+        self.assertEqual({row["email"].lower() for row in state["monitor_mail"] if row["monitor_id"] == monitor_id},
+                         {"owner@example.test", "tech@example.test"})
+        # Enabling alerts does not replay historical faults.
+        self.assertEqual(state["outbox"], [])
+        _, original_key, original_chain = self.certificates["first"]
+        peer.replace_certificate(original_chain, original_key)
         state = self.force_check(monitor_id, "ok")
-        self.assertIn("recovered", {event["kind"] for event in state["monitor_events"]})
+        alerts = [item for item in state["outbox"] if item["kind"] == "monitor"]
+        self.assertEqual(len(alerts), 2)
+        self.assertEqual(len({item["event_id"] for item in alerts}), 1)
+        peer.replace_certificate(other_chain, other_key)
+        state = self.force_check(monitor_id, "changed")
+        alerts = [item for item in state["outbox"] if item["kind"] == "monitor"]
+        self.assertEqual(len(alerts), 4)
+        self.assertEqual(len({item["event_id"] for item in alerts}), 2)
+        state = self.force_check(monitor_id, "changed")
+        self.assertEqual(len([item for item in state["outbox"] if item["kind"] == "monitor"]), 4)
+        self.assertFalse(state["delivery"]["configured"])
+        self.assertTrue(all(item["status"] == "pending" and item["attempts"] == 0 for item in state["outbox"]))
+        # Editing certificate contacts cannot delete independent monitor mail.
+        status, _, body = self.form(f"/api/certificates/{certificate['id']}/contacts", {
+            "role": "technical", "name": "Another technician", "email": "another@example.test",
+        }, method="PUT")
+        self.assertEqual(status, 200, body)
+        self.assertEqual(len(self.state()["outbox"]), 4)
+        self.edit_monitor(monitor_id, email_alerts=0, email_recipients="owner@example.test;tech@example.test")
+        status, _, body = self.form("/api/delivery/process", {})
+        self.assertEqual(status, 200, body)
+        self.assertEqual(self.state()["outbox"], [])
 
 
 if __name__ == "__main__":

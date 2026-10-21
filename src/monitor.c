@@ -1,5 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "monitor.h"
+#include "delivery.h"
+#include "lifecycle.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -329,6 +331,7 @@ static int apply_result(Store *store, int64_t monitor_id, int64_t revision,
     const char *kind = NULL;
     const char *detail;
     int interval;
+    int approved = 0;
     int ok = 0;
     int rc;
     char message[2048];
@@ -379,6 +382,9 @@ static int apply_result(Store *store, int64_t monitor_id, int64_t revision,
         error_text(err, errlen, "Memoria insufficiente per aggiornare il monitor.");
         goto failure;
     }
+    if (observed[0] && !fingerprint_equal(expected, observed) &&
+        !lifecycle_fingerprint_approved(store, monitor_id, observed, now,
+                                         &approved, err, errlen)) goto failure;
     detail = local_error ? (local_message != NULL ? local_message : "Errore locale non specificato.") :
         (result->verification_error != NULL ? result->verification_error : "");
     if (local_error) {
@@ -390,7 +396,7 @@ static int apply_result(Store *store, int64_t monitor_id, int64_t revision,
     } else if (!result->tls_ok || observed[0] == '\0') {
         status = "tls_error";
         (void)snprintf(message, sizeof(message), "Il servizio %s risponde TCP, ma il certificato HTTPS non e disponibile. %s", target, detail);
-    } else if (!fingerprint_equal(expected, observed)) {
+    } else if (!fingerprint_equal(expected, observed) && !approved) {
         status = "changed";
         (void)snprintf(message, sizeof(message), "Il certificato servito da %s differisce da quello registrato. %s", target, detail);
     } else if (!result->verified) {
@@ -424,6 +430,10 @@ static int apply_result(Store *store, int64_t monitor_id, int64_t revision,
         sqlite3_bind_int64(statement, 12, revision) != SQLITE_OK || sqlite3_step(statement) != SQLITE_DONE)
         goto database_failure;
     sqlite3_finalize(statement); statement = NULL;
+    /* Revision/lease checks above reject probes started before an installation
+     * request. Only fresh, fully verified observations can confirm a rollout. */
+    if (!lifecycle_record_monitor(store, monitor_id, now, observed,
+        !local_error && result->verified && !strcmp(status, "ok"), err, errlen)) goto failure;
     if (kind != NULL) {
         if (strcmp(kind, "recovered") == 0)
             (void)snprintf(message, sizeof(message), "Il servizio %s e di nuovo raggiungibile e presenta il certificato registrato, verificato.", target);
@@ -435,7 +445,10 @@ static int apply_result(Store *store, int64_t monitor_id, int64_t revision,
             !bind_text(statement, 5, observed) || sqlite3_bind_int64(statement, 6, now) != SQLITE_OK ||
             sqlite3_step(statement) != SQLITE_DONE)
             goto database_failure;
+        int64_t event_id = sqlite3_last_insert_rowid(store->db);
         sqlite3_finalize(statement); statement = NULL;
+        int queued = 0;
+        if (!delivery_queue_monitor_event(store, event_id, now, &queued, err, errlen)) goto failure;
     }
     ok = store_exec(store, "RELEASE monitor_result", err, errlen);
     if (!ok) goto failure;

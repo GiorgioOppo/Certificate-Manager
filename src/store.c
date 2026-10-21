@@ -10,7 +10,7 @@
 #include <unistd.h>
 #endif
 
-#define STORE_SCHEMA_VERSION 4
+#define STORE_SCHEMA_VERSION 5
 
 static void set_error(char *err, size_t errlen, const char *message)
 {
@@ -86,11 +86,23 @@ static int validate_schema(Store *store, int version, char *err, size_t errlen)
         ("SELECT id,monitor_id,kind,message,expected_fingerprint,observed_fingerprint,"
         "created_at,acknowledged_at FROM monitor_events LIMIT 0"),
         "SELECT id,enabled,host,port,security,from_email,username,password_cipher,"
-        "updated_at FROM smtp_settings LIMIT 0"
+        "updated_at FROM smtp_settings LIMIT 0",
+        "SELECT id,old_certificate_id,new_certificate_id,status,requested_at,planned_renewal_at,planned_install_at,responsible,notes,created_at,updated_at,finished_at FROM renewal_jobs LIMIT 0",
+        "SELECT job_id,monitor_id,verify_requested_at,verified_at,last_match_at FROM renewal_endpoints LIMIT 0",
+        "SELECT certificate_id,thresholds,escalation_email,escalation_name,escalation_after_days,enabled FROM reminder_policies LIMIT 0",
+        "SELECT email_alerts FROM monitors LIMIT 0",
+        "SELECT monitor_id,name,email FROM monitor_recipients LIMIT 0",
+        "SELECT event_id FROM outbox LIMIT 0",
+        "SELECT id,name,email FROM directory_people LIMIT 0",
+        "SELECT id,name FROM directory_groups LIMIT 0",
+        "SELECT group_id,person_id FROM directory_memberships LIMIT 0",
+        "SELECT certificate_id,role,group_id FROM certificate_groups LIMIT 0",
+        "SELECT certificate_id,role,person_id,group_id FROM directory_assignments LIMIT 0"
     };
     size_t i;
 
-    size_t query_count = version >= 4 ? sizeof(queries) / sizeof(queries[0]) :
+    size_t query_count = version >= 5 ? sizeof(queries) / sizeof(queries[0]) :
+                         version >= 4 ? 8 :
                          version >= 3 ? 7 : version >= 2 ? 5 : 2;
     for (i = 0; i < query_count; ++i) {
         sqlite3_stmt *stmt = NULL;
@@ -195,6 +207,51 @@ int store_open(Store *store, const char *path, char *err, size_t errlen)
         "security TEXT NOT NULL DEFAULT 'starttls' CHECK(security IN('starttls','tls')),"
         "from_email TEXT NOT NULL DEFAULT '',username TEXT NOT NULL DEFAULT '',"
         "password_cipher BLOB,updated_at INTEGER NOT NULL);";
+    static const char migration_v5[] =
+        "CREATE TABLE renewal_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "old_certificate_id INTEGER NOT NULL REFERENCES certificates(id) ON DELETE CASCADE,"
+        "new_certificate_id INTEGER REFERENCES certificates(id) ON DELETE SET NULL,"
+        "status TEXT NOT NULL DEFAULT 'requested' CHECK(status IN('requested','awaiting_ca','signed','delivered','installing','verified','retired')),"
+        "requested_at INTEGER NOT NULL DEFAULT 0,planned_renewal_at INTEGER,planned_install_at INTEGER,"
+        "responsible TEXT NOT NULL DEFAULT '',notes TEXT NOT NULL DEFAULT '',created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,finished_at INTEGER,"
+        "CHECK(new_certificate_id IS NULL OR new_certificate_id<>old_certificate_id),UNIQUE(old_certificate_id,new_certificate_id));"
+        "CREATE TABLE renewal_endpoints (job_id INTEGER NOT NULL REFERENCES renewal_jobs(id) ON DELETE CASCADE,"
+        "monitor_id INTEGER NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,verify_requested_at INTEGER,verified_at INTEGER,last_match_at INTEGER,PRIMARY KEY(job_id,monitor_id));"
+        "CREATE TABLE reminder_policies (certificate_id INTEGER PRIMARY KEY REFERENCES certificates(id) ON DELETE CASCADE,"
+        "thresholds TEXT NOT NULL DEFAULT '45,30,15,2,0',escalation_email TEXT NOT NULL DEFAULT '',escalation_name TEXT NOT NULL DEFAULT '',"
+        "escalation_after_days INTEGER NOT NULL DEFAULT 7 CHECK(escalation_after_days BETWEEN 0 AND 365),enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN(0,1)));"
+        ;
+    static const char migration_v5_queue[] =
+        "ALTER TABLE notifications RENAME TO notifications_v4;"
+        "CREATE TABLE notifications(certificate_id INTEGER NOT NULL REFERENCES certificates(id) ON DELETE CASCADE,"
+        "threshold INTEGER NOT NULL CHECK(threshold BETWEEN 0 AND 3650),sent_at INTEGER NOT NULL,PRIMARY KEY(certificate_id,threshold));"
+        "INSERT INTO notifications SELECT * FROM notifications_v4;DROP TABLE notifications_v4;"
+        "ALTER TABLE monitors ADD COLUMN email_alerts INTEGER NOT NULL DEFAULT 0 CHECK(email_alerts IN(0,1));"
+        "CREATE TABLE monitor_recipients(monitor_id INTEGER NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,name TEXT NOT NULL DEFAULT '',"
+        "email TEXT NOT NULL COLLATE NOCASE,PRIMARY KEY(monitor_id,email));"
+        "ALTER TABLE outbox RENAME TO outbox_v4;"
+        "CREATE TABLE outbox(id INTEGER PRIMARY KEY AUTOINCREMENT,certificate_id INTEGER NOT NULL REFERENCES certificates(id) ON DELETE CASCADE,"
+        "kind TEXT NOT NULL CHECK(kind IN('expiry','certificate','escalation','monitor')),recipient_name TEXT NOT NULL,recipient_email TEXT NOT NULL,"
+        "threshold INTEGER NOT NULL DEFAULT -1,subject TEXT NOT NULL,body TEXT NOT NULL,attachment_pem TEXT NOT NULL DEFAULT '',"
+        "status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN('pending','sending','sent','failed')),attempts INTEGER NOT NULL DEFAULT 0,"
+        "last_error TEXT NOT NULL DEFAULT '',created_at INTEGER NOT NULL,sent_at INTEGER,next_attempt INTEGER NOT NULL DEFAULT 0,"
+        "event_id INTEGER REFERENCES monitor_events(id) ON DELETE CASCADE);"
+        "INSERT INTO outbox(id,certificate_id,kind,recipient_name,recipient_email,threshold,subject,body,attachment_pem,status,attempts,last_error,created_at,sent_at,next_attempt) "
+        "SELECT id,certificate_id,kind,recipient_name,recipient_email,threshold,subject,body,attachment_pem,status,attempts,last_error,created_at,sent_at,next_attempt FROM outbox_v4;"
+        "DROP TABLE outbox_v4;"
+        "CREATE UNIQUE INDEX outbox_certificate_unique ON outbox(certificate_id,kind,recipient_email,threshold) WHERE kind<>'monitor';"
+        "CREATE UNIQUE INDEX outbox_monitor_unique ON outbox(event_id,recipient_email) WHERE kind='monitor';"
+        ;
+    static const char migration_v5_directory[] =
+        "CREATE TABLE directory_people(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL DEFAULT '',email TEXT NOT NULL UNIQUE COLLATE NOCASE);"
+        "CREATE TABLE directory_groups(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE COLLATE NOCASE);"
+        "CREATE TABLE directory_memberships(group_id INTEGER NOT NULL REFERENCES directory_groups(id) ON DELETE CASCADE,person_id INTEGER NOT NULL REFERENCES directory_people(id) ON DELETE CASCADE,PRIMARY KEY(group_id,person_id));"
+        "CREATE TABLE certificate_groups(certificate_id INTEGER NOT NULL REFERENCES certificates(id) ON DELETE CASCADE,role TEXT NOT NULL CHECK(role IN('business','technical')),group_id INTEGER NOT NULL REFERENCES directory_groups(id) ON DELETE CASCADE,PRIMARY KEY(certificate_id,role,group_id));"
+        "CREATE TABLE directory_assignments(certificate_id INTEGER NOT NULL REFERENCES certificates(id) ON DELETE CASCADE,role TEXT NOT NULL CHECK(role IN('business','technical')),person_id INTEGER NOT NULL REFERENCES directory_people(id) ON DELETE CASCADE,group_id INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(certificate_id,role,person_id,group_id));"
+        "INSERT OR IGNORE INTO directory_people(name,email) SELECT name,email FROM contacts ORDER BY certificate_id,role;"
+        "INSERT OR IGNORE INTO directory_assignments(certificate_id,role,person_id,group_id) SELECT c.certificate_id,c.role,p.id,0 FROM contacts c JOIN directory_people p ON p.email=c.email COLLATE NOCASE;"
+        "INSERT OR IGNORE INTO renewal_jobs(old_certificate_id,new_certificate_id,status,requested_at,notes,created_at,updated_at,finished_at) "
+        "SELECT id,superseded_by,'retired',added_at,'Storico importato dalla versione precedente; installazione non verificata.',added_at,added_at,added_at FROM certificates WHERE archived=1 AND superseded_by IS NOT NULL;";
     int version;
     int rc;
 
@@ -289,6 +346,15 @@ int store_open(Store *store, const char *path, char *err, size_t errlen)
                  validate_schema(store, 4, err, errlen) &&
                  store_exec(store, "PRAGMA user_version=4", err, errlen);
             version = 4;
+        }
+        if (ok && version == 4) {
+            ok = validate_schema(store, 4, err, errlen) &&
+                 store_exec(store, migration_v5, err, errlen) &&
+                 store_exec(store, migration_v5_queue, err, errlen) &&
+                 store_exec(store, migration_v5_directory, err, errlen) &&
+                 validate_schema(store, 5, err, errlen) &&
+                 store_exec(store, "PRAGMA user_version=5", err, errlen);
+            version = 5;
         }
         if (ok) ok = version == STORE_SCHEMA_VERSION &&
                      validate_schema(store, STORE_SCHEMA_VERSION, err, errlen) &&
@@ -495,7 +561,7 @@ static int ascii_letter_or_digit(unsigned char c)
            (c >= '0' && c <= '9');
 }
 
-static int email_valid(const char *email)
+int store_email_valid(const char *email)
 {
     const char *at;
     const char *label;
@@ -559,7 +625,7 @@ int store_set_contacts(Store *store, int64_t id, const StoreContact *contacts,
         const char *name = contact->name != NULL ? contact->name : "";
         if (contact->role == NULL ||
             (strcmp(contact->role, "business") != 0 && strcmp(contact->role, "technical") != 0) ||
-            strlen(name) > 120 || !email_valid(contact->email)) {
+            strlen(name) > 120 || !store_email_valid(contact->email)) {
             set_error(err, errlen, "Contatto non valido: ruolo, nome (massimo 120 byte) o indirizzo email.");
             return 0;
         }

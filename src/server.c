@@ -3,6 +3,8 @@
 #include "chain.h"
 #include "delivery.h"
 #include "monitor.h"
+#include "workspace.h"
+#include "lifecycle.h"
 #include "smtp_settings.h"
 #include "remote_service.h"
 #include "assets.h"
@@ -294,6 +296,14 @@ static void upload(int fd, Store *store, const Request *r, int64_t renew_id) {
     int added = 0, duplicates = 0;
     int64_t new_id = 0;
     int queued = 0;
+    if (ok && renew_id == -1) {
+        size_t preview_length=0;
+        char *preview=workspace_import_preview(store,temporary,filename,&preview_length,error,sizeof error);
+        unlink(temporary);
+        if(preview){response(fd,200,"application/json; charset=utf-8",preview,preview_length);free(preview);}
+        else json_error(fd,400,error[0]?error:"Anteprima non disponibile.");
+        return;
+    }
     if (ok) {
         if (renew_id) ok = app_renew(store, renew_id, temporary, filename, &new_id, &queued, error, sizeof error);
         else ok = app_import(store, temporary, filename, &added, &duplicates, error, sizeof error);
@@ -323,7 +333,7 @@ static int resource_path(const char *target, const char *prefix, int64_t *id, co
     return 1;
 }
 
-static char *form_decode(const unsigned char *data, size_t length) {
+static char *form_decode_value(const unsigned char *data, size_t length, int multiline) {
     char *result = malloc(length + 1);
     if (!result) return NULL;
     size_t written = 0;
@@ -335,7 +345,7 @@ static char *form_decode(const unsigned char *data, size_t length) {
             if (a < 0 || b < 0) goto invalid;
             c = (unsigned char)(a * 16 + b); i += 2;
         } else if (c == '+') c = ' ';
-        if (c < 32 || c == 127) goto invalid;
+        if ((c < 32 && !(multiline && (c == '\r' || c == '\n' || c == '\t'))) || c == 127) goto invalid;
         result[written++] = (char)c;
     }
     result[written] = 0;
@@ -346,10 +356,12 @@ invalid:
     return NULL;
 }
 
+static char *form_decode(const unsigned char *data, size_t length) { return form_decode_value(data,length,0); }
+
 static int single_form_value(const Request *r, const char *wanted, char **output,
                               int required, char *err, size_t n) {
     *output = NULL;
-    if (r->length > 8192 || strncmp(r->content_type, "application/x-www-form-urlencoded", 33) ||
+    if (r->length > 65536 || strncmp(r->content_type, "application/x-www-form-urlencoded", 33) ||
         (r->content_type[33] && r->content_type[33] != ';')) {
         snprintf(err, n, "Formato della richiesta non valido."); return 0;
     }
@@ -361,7 +373,7 @@ static int single_form_value(const Request *r, const char *wanted, char **output
         if (equal == end) { snprintf(err, n, "Campo della richiesta non valido."); goto fail; }
         if (equal - start == strlen(wanted) && !memcmp(r->body + start, wanted, equal - start)) {
             if (*output) { snprintf(err, n, "Campo duplicato nella richiesta."); goto fail; }
-            *output = form_decode(r->body + equal + 1, end - equal - 1);
+            *output = form_decode_value(r->body + equal + 1, end - equal - 1, !strcmp(wanted,"notes") || !strcmp(wanted,"email_recipients"));
             if (!*output) { snprintf(err, n, "Valore del campo non valido."); goto fail; }
         }
         start = end + 1;
@@ -466,20 +478,27 @@ static int form_number(const char *value, int64_t minimum, int64_t maximum, int6
 
 static void save_monitor(int fd, Store *store, const Request *r, int64_t id) {
     char error[512] = "";
-    char *cert = NULL, *target = NULL, *interval = NULL, *enabled = NULL;
-    int64_t certificate_id = 0, minutes = 15, active = 1, saved_id = 0;
+    char *cert = NULL, *target = NULL, *interval = NULL, *enabled = NULL, *mail_enabled=NULL, *recipients=NULL;
+    int64_t certificate_id = 0, minutes = 15, active = 1, saved_id = 0, mail_active=0;
     int ok = single_form_value(r, "certificate_id", &cert, 1, error, sizeof error) &&
              single_form_value(r, "target", &target, 1, error, sizeof error) &&
              single_form_value(r, "interval_minutes", &interval, 0, error, sizeof error) &&
-             single_form_value(r, "enabled", &enabled, 0, error, sizeof error);
+             single_form_value(r, "enabled", &enabled, 0, error, sizeof error) &&
+             single_form_value(r,"email_alerts",&mail_enabled,0,error,sizeof error) &&
+             single_form_value(r,"email_recipients",&recipients,0,error,sizeof error);
     if (ok && (!form_number(cert, 1, INT64_MAX, &certificate_id) ||
                (interval && !form_number(interval, 1, 1440, &minutes)) ||
                (enabled && !form_number(enabled, 0, 1, &active)))) {
         snprintf(error, sizeof error, "Certificato, intervallo (1–1440 minuti) o stato del monitoraggio non valido."); ok = 0;
     }
+    if(ok&&mail_enabled&&!form_number(mail_enabled,0,1,&mail_active)){snprintf(error,sizeof error,"Configurazione email monitor non valida.");ok=0;}
+    int transaction=ok&&store_exec(store,"SAVEPOINT monitor_configuration",error,sizeof error);
+    if(ok&&!transaction)ok=0;
     if (ok) ok = monitor_save(store, id, certificate_id, target, (int)(minutes * 60), (int)active,
                               (int64_t)time(NULL), &saved_id, error, sizeof error);
-    free(cert); free(target); free(interval); free(enabled);
+    if(ok&&(mail_enabled||recipients))ok=workspace_monitor_mail(store,saved_id,(int)mail_active,recipients?recipients:"",error,sizeof error);
+    if(transaction){if(ok)ok=store_exec(store,"RELEASE monitor_configuration",error,sizeof error);if(!ok)sqlite3_exec(store->db,"ROLLBACK TO monitor_configuration; RELEASE monitor_configuration",NULL,NULL,NULL);}
+    free(cert); free(target); free(interval); free(enabled);free(mail_enabled);free(recipients);
     if (!ok) { json_error(fd, 400, error); return; }
     char body[96];
     int length = snprintf(body, sizeof body, "{\"ok\":true,\"monitor_id\":%" PRId64 "}", saved_id);
@@ -549,11 +568,11 @@ static void update_contacts(int fd, Store *store, int64_t id, const Request *r) 
             contacts[i].email = values[2][i];
         }
         if (store_exec(store, "BEGIN IMMEDIATE", error, sizeof error)) {
-            ok = store_set_contacts(store, id, contacts, counts[0], error, sizeof error);
+            ok = store_set_contacts(store, id, contacts, counts[0], error, sizeof error) && workspace_contacts_saved(store,id,error,sizeof error);
             sqlite3_stmt *prune = NULL;
             if (ok) {
                 ok = sqlite3_prepare_v2(store->db, "DELETE FROM outbox WHERE certificate_id=?1 "
-                       "AND status IN('pending','failed') AND NOT EXISTS (SELECT 1 FROM contacts c "
+                       "AND kind IN('expiry','certificate') AND status IN('pending','failed') AND NOT EXISTS (SELECT 1 FROM contacts c "
                        "WHERE c.certificate_id=outbox.certificate_id AND c.email=outbox.recipient_email COLLATE NOCASE "
                        "AND c.role=CASE outbox.kind WHEN 'expiry' THEN 'business' ELSE 'technical' END)",
                        -1, &prune, NULL) == SQLITE_OK &&
@@ -632,6 +651,66 @@ static void configure_smtp(int fd, Store *store, const Request *r, int test_only
     response(fd, 200, "application/json; charset=utf-8", body, strlen(body));
 }
 
+/* Workflow forms share the same Host, Origin and CSRF gate as existing APIs. */
+static int form_ids(const Request *r,const char *name,int64_t *ids,size_t *count,char *err,size_t n){
+    *count=0;if(r->length>65536){snprintf(err,n,"Modulo troppo grande.");return 0;}
+    for(size_t start=0;start<r->length;){size_t end=start;while(end<r->length&&r->body[end]!='&')end++;size_t equal=start;while(equal<end&&r->body[equal]!='=')equal++;
+        if(equal-start==strlen(name)&&!memcmp(r->body+start,name,equal-start)){
+            char *value=equal<end?form_decode(r->body+equal+1,end-equal-1):NULL;int64_t id=0;
+            int ok=value&&*count<1000&&form_number(value,1,INT64_MAX,&id);free(value);
+            if(!ok){snprintf(err,n,"Identificativo della persona o del gruppo non valido.");return 0;}
+            ids[(*count)++]=id;
+        }start=end+1;
+    }return 1;
+}
+static void directory_form(int fd,Store *s,const Request *r,int group,int64_t id){
+    char error[512]="",*name=NULL,*email=NULL;int64_t members[1000],saved=0;size_t count=0;int ok;
+    if(!strcmp(r->method,"DELETE"))ok=group?workspace_remove_group(s,id,error,sizeof error):workspace_remove_person(s,id,error,sizeof error);
+    else{
+        ok=single_form_value(r,"name",&name,group,error,sizeof error)&&single_form_value(r,"email",&email,!group,error,sizeof error)&&form_ids(r,group?"person_id":"group_id",members,&count,error,sizeof error);
+        if(ok)ok=group?workspace_save_group(s,id,name?name:"",members,count,&saved,error,sizeof error):workspace_save_person(s,id,name?name:"",email?email:"",members,count,&saved,error,sizeof error);
+    }
+    free(name);free(email);
+    if(!ok){json_error(fd,400,error[0]?error:"Operazione rubrica non valida.");return;}
+    char body[128];int length=snprintf(body,sizeof body,"{\"ok\":true,\"id\":%"PRId64"}",saved?saved:id);response(fd,200,"application/json; charset=utf-8",body,(size_t)length);
+}
+static void assignments_form(int fd,Store *s,const Request *r,int64_t id){
+    char error[512]="",*role=NULL;int64_t people[1000],groups[1000];size_t pc=0,gc=0;
+    int ok=single_form_value(r,"role",&role,1,error,sizeof error)&&form_ids(r,"person_id",people,&pc,error,sizeof error)&&form_ids(r,"group_id",groups,&gc,error,sizeof error)&&workspace_assign(s,id,role,people,pc,groups,gc,error,sizeof error);free(role);
+    if(!ok){json_error(fd,400,error);return;}
+    int count=0;app_check(s,(int64_t)time(NULL),&count,stdout,error,sizeof error);
+    response(fd,200,"application/json; charset=utf-8","{\"ok\":true}",11);
+}
+static void policy_form(int fd,Store *s,const Request *r,int64_t id){
+    const char *names[]={"thresholds","enabled","escalation_email","escalation_name","escalation_after_days"};char *v[5]={0},error[512]="";int ok=1;int64_t enabled=1,days=7;
+    for(size_t i=0;i<5&&ok;i++)ok=single_form_value(r,names[i],&v[i],i==0,error,sizeof error);
+    if(ok)ok=(!v[1]||form_number(v[1],0,1,&enabled))&&(!v[4]||form_number(v[4],0,365,&days));
+    if(ok)ok=workspace_save_policy(s,id,v[0],(int)enabled,v[2]?v[2]:"",v[3]?v[3]:"",(int)days,error,sizeof error);
+    for(size_t i=0;i<5;i++)free(v[i]);
+    if(!ok){json_error(fd,400,error[0]?error:"Regola promemoria non valida.");return;}
+    int count=0;app_check(s,(int64_t)time(NULL),&count,stdout,error,sizeof error);
+    response(fd,200,"application/json; charset=utf-8","{\"ok\":true}",11);
+}
+static void renewal_form(int fd,Store *s,const Request *r,int64_t id,const char *action){
+    char error[512]="";int ok=0,queued=0;int64_t saved=id;
+    if(!store_exec(s,"SAVEPOINT renewal_configuration",error,sizeof error)){json_error(fd,500,error);return;}
+    if(*action){
+        if(!strcmp(action,"/check-install")){char *value=NULL;int64_t monitor_id=0;ok=single_form_value(r,"monitor_id",&value,0,error,sizeof error)&&(!value||!*value||form_number(value,0,INT64_MAX,&monitor_id));free(value);if(ok)ok=lifecycle_request_install(s,id,monitor_id,error,sizeof error);}
+        else if(!strcmp(action,"/complete"))ok=lifecycle_finish(s,id,error,sizeof error);
+        else if(!strcmp(action,"/retire"))ok=lifecycle_retire(s,id,error,sizeof error);
+    }else{
+        const char *names[]={"old_certificate_id","new_certificate_id","status","requested_at","planned_renewal_at","planned_install_at","responsible","notes"};char *v[8]={0};int64_t old=0,new_id=0,requested=0,planned_renewal=0,planned_install=0;ok=1;
+        for(size_t i=0;i<8&&ok;i++)ok=single_form_value(r,names[i],&v[i],i==0,error,sizeof error);
+        if(ok)ok=form_number(v[0],1,INT64_MAX,&old)&&(!v[1]||!*v[1]||form_number(v[1],1,INT64_MAX,&new_id))&&(!v[3]||!*v[3]||form_number(v[3],0,INT64_MAX,&requested))&&(!v[4]||!*v[4]||form_number(v[4],0,INT64_MAX,&planned_renewal))&&(!v[5]||!*v[5]||form_number(v[5],0,INT64_MAX,&planned_install));
+        if(ok&&new_id){ok=lifecycle_link_existing(s,old,new_id,&saved,&queued,error,sizeof error);}
+        if(ok&&(!new_id||v[2]))ok=lifecycle_set_plan(s,saved,old,v[2]?v[2]:"requested",requested,planned_renewal,planned_install,v[6]?v[6]:"",v[7]?v[7]:"",&saved,error,sizeof error);
+        for(size_t i=0;i<8;i++)free(v[i]);
+    }
+    if(ok)ok=store_exec(s,"RELEASE renewal_configuration",error,sizeof error);
+    if(!ok){sqlite3_exec(s->db,"ROLLBACK TO renewal_configuration; RELEASE renewal_configuration",NULL,NULL,NULL);json_error(fd,400,error[0]?error:"Pratica di rinnovo non valida.");return;}
+    char body[160];int length=snprintf(body,sizeof body,"{\"ok\":true,\"job_id\":%"PRId64",\"queued\":%d}",saved,queued);response(fd,200,"application/json; charset=utf-8",body,(size_t)length);
+}
+
 static int serve_ui_page(int fd, const char *target) {
     struct Page {
         const char *path;
@@ -646,7 +725,8 @@ static int serve_ui_page(int fd, const char *target) {
         { "/verifica", asset_verify_html, asset_verify_html_size },
         { "/promemoria", asset_reminders_html, asset_reminders_html_size },
         { "/email", asset_delivery_html, asset_delivery_html_size },
-        { "/workflow", asset_workflow_html, asset_workflow_html_size }
+        { "/workflow", asset_workflow_html, asset_workflow_html_size },
+        { "/rubrica", asset_directory_html, asset_directory_html_size }
     };
     size_t length = strcspn(target, "?");
     if (length > 1 && target[length - 1] == '/' && target[length - 2] != '/') length--;
@@ -661,6 +741,10 @@ static int serve_ui_page(int fd, const char *target) {
 
 static void route(int fd, Store *store, const Request *r, const char *token) {
     int64_t certificate_id = 0, outbox_id = 0, monitor_id = 0, event_id = 0;
+    int64_t person_id=0,group_id=0,job_id=0; const char *person_action="",*group_action="",*job_action="";
+    int person_path=resource_path(r->target,"/api/people/",&person_id,&person_action);
+    int group_path=resource_path(r->target,"/api/groups/",&group_id,&group_action);
+    int job_path=resource_path(r->target,"/api/renewal-jobs/",&job_id,&job_action);
     const char *certificate_action = "", *outbox_action = "", *monitor_action = "", *event_action = "";
     int cert_path = resource_path(r->target, "/api/certificates/", &certificate_id, &certificate_action);
     int out_path = resource_path(r->target, "/api/outbox/", &outbox_id, &outbox_action);
@@ -710,6 +794,18 @@ static void route(int fd, Store *store, const Request *r, const char *token) {
                 free(message);
             }
         } else json_error(fd, 404, "Risorsa non trovata.");
+    } else if (!strcmp(r->method,"POST")&&!strcmp(r->target,"/api/import/preview")) {
+        upload(fd,store,r,-1);
+    } else if ((!strcmp(r->method,"POST")&&!strcmp(r->target,"/api/people")) || (person_path&&!*person_action&&(!strcmp(r->method,"PUT")||!strcmp(r->method,"DELETE")))) {
+        directory_form(fd,store,r,0,person_id);
+    } else if ((!strcmp(r->method,"POST")&&!strcmp(r->target,"/api/groups")) || (group_path&&!*group_action&&(!strcmp(r->method,"PUT")||!strcmp(r->method,"DELETE")))) {
+        directory_form(fd,store,r,1,group_id);
+    } else if (!strcmp(r->method,"POST")&&cert_path&&!strcmp(certificate_action,"/assignments")) {
+        assignments_form(fd,store,r,certificate_id);
+    } else if (!strcmp(r->method,"PUT")&&cert_path&&!strcmp(certificate_action,"/reminder-policy")) {
+        policy_form(fd,store,r,certificate_id);
+    } else if ((!strcmp(r->method,"POST")&&!strcmp(r->target,"/api/renewal-jobs"))||(job_path&&((!strcmp(r->method,"PUT")&&!*job_action)||(!strcmp(r->method,"POST")&&*job_action)))) {
+        renewal_form(fd,store,r,job_id,job_action);
     } else if (!strcmp(r->method, "PUT") && !strcmp(r->target, "/api/smtp/settings")) {
         configure_smtp(fd, store, r, 0);
     } else if (!strcmp(r->method, "POST") && !strcmp(r->target, "/api/smtp/test")) {

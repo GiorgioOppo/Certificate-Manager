@@ -2,6 +2,7 @@
 #include "delivery.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <inttypes.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -17,6 +18,29 @@
 #define CLAIM_LEASE 120
 #define MAX_BATCH 3
 #define MAX_ATTACHMENT (16U * 1024U * 1024U)
+
+/* Recheck recipients/configuration when claiming, not only when preparing a
+ * message. A disabled alert or removed contact must never cause a later send. */
+#define DELIVERY_ELIGIBLE_SQL(clock_parameter) \
+    "EXISTS(SELECT 1 FROM certificates certificate WHERE certificate.id=outbox.certificate_id " \
+    "AND certificate.archived=0 AND (" \
+    "(outbox.kind='expiry' AND NOT EXISTS(SELECT 1 FROM reminder_policies policy " \
+    "WHERE policy.certificate_id=certificate.id AND policy.enabled=0) " \
+    "AND EXISTS(SELECT 1 FROM contacts contact WHERE contact.certificate_id=certificate.id " \
+    "AND contact.role='business' AND contact.email=outbox.recipient_email COLLATE NOCASE)) OR " \
+    "(outbox.kind='certificate' AND certificate.not_before<=" clock_parameter \
+    " AND certificate.not_after>" clock_parameter \
+    " AND EXISTS(SELECT 1 FROM contacts contact WHERE contact.certificate_id=certificate.id " \
+    "AND contact.role='technical' AND contact.email=outbox.recipient_email COLLATE NOCASE)) OR " \
+    "(outbox.kind='escalation' AND EXISTS(SELECT 1 FROM reminder_policies policy " \
+    "WHERE policy.certificate_id=certificate.id AND policy.enabled=1 " \
+    "AND policy.escalation_email=outbox.recipient_email COLLATE NOCASE " \
+    "AND EXISTS(SELECT 1 FROM notifications notification WHERE notification.certificate_id=certificate.id " \
+    "AND notification.sent_at<=" clock_parameter "-policy.escalation_after_days*86400))) OR " \
+    "(outbox.kind='monitor' AND EXISTS(SELECT 1 FROM monitor_events event JOIN monitors monitor " \
+    "ON monitor.id=event.monitor_id JOIN monitor_recipients recipient ON recipient.monitor_id=monitor.id " \
+    "WHERE event.id=outbox.event_id AND monitor.email_alerts=1 " \
+    "AND recipient.email=outbox.recipient_email COLLATE NOCASE))))"
 
 typedef struct { char *name, *email; } Recipient;
 
@@ -233,6 +257,56 @@ static char *formatted(const char *format, ...)
     return text;
 }
 
+int reminder_policy_due(Store *store, int64_t cert_id, int64_t not_after,
+                         int64_t now, int *threshold, char *err, size_t n)
+{
+    if (threshold) *threshold = -1;
+    if (!valid_store(store, err, n)) return 0;
+    if (!threshold || cert_id <= 0 || now < 0 || not_after < 0)
+        return error_message(err, n, "Dati del promemoria non validi.");
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(store->db,
+        "SELECT thresholds,enabled FROM reminder_policies WHERE certificate_id=?", -1,
+        &stmt, NULL) != SQLITE_OK || sqlite3_bind_int64(stmt, 1, cert_id) != SQLITE_OK) {
+        sqlite3_finalize(stmt); return db_error(store, err, n);
+    }
+    int result = sqlite3_step(stmt);
+    char *csv = NULL;
+    if (result == SQLITE_ROW) {
+        if (!sqlite3_column_int(stmt, 1)) {
+            sqlite3_finalize(stmt); return 1;
+        }
+        csv = column_text(stmt, 0);
+    } else if (result == SQLITE_DONE) csv = strdup("45,30,15,2,0");
+    else { sqlite3_finalize(stmt); return db_error(store, err, n); }
+    if (sqlite3_finalize(stmt) != SQLITE_OK) { free(csv); return db_error(store, err, n); }
+    if (!csv) return error_message(err, n, "Memoria insufficiente per le soglie.");
+    unsigned char seen[3651] = {0};
+    const char *cursor = csv;
+    int due = -1, valid = 1;
+    while (*cursor) {
+        while (isspace((unsigned char)*cursor)) ++cursor;
+        if (!isdigit((unsigned char)*cursor)) { valid = 0; break; }
+        errno = 0;
+        char *end = NULL;
+        long value = strtol(cursor, &end, 10);
+        if (errno || value < 0 || value > 3650 || seen[value]) { valid = 0; break; }
+        seen[value] = 1;
+        int64_t seconds = (int64_t)value * INT64_C(86400);
+        if ((now > INT64_MAX - seconds || not_after <= now + seconds) &&
+            (due < 0 || value < due)) due = (int)value;
+        cursor = end;
+        while (isspace((unsigned char)*cursor)) ++cursor;
+        if (!*cursor) break;
+        if (*cursor++ != ',' || !*cursor) { valid = 0; break; }
+    }
+    free(csv);
+    if (!valid || !seen[0])
+        return error_message(err, n, "Soglie non valide: usa giorni univoci da 0 a 3650 e includi 0.");
+    *threshold = due;
+    return 1;
+}
+
 static int queue_rows(Store *store, int64_t cert_id, const char *kind,
                       int threshold, Recipient *recipients, size_t count,
                       const char *subject, const char *body, const char *attachment,
@@ -246,7 +320,7 @@ static int queue_rows(Store *store, int64_t cert_id, const char *kind,
         "older.certificate_id=?1 AND older.kind='expiry' AND older.recipient_email=?4 COLLATE NOCASE AND older.threshold<?5)) "
         "AND NOT EXISTS(SELECT 1 FROM outbox prior WHERE prior.certificate_id=?1 AND prior.kind=?2 "
         "AND prior.recipient_email=?4 COLLATE NOCASE AND prior.threshold=?5) "
-        "ON CONFLICT(certificate_id,kind,recipient_email,threshold) DO NOTHING";
+        "ON CONFLICT DO NOTHING";
     if (sqlite3_prepare_v2(store->db, sql, -1, &insert, NULL) != SQLITE_OK) goto fail;
     if (!strcmp(kind, "expiry") && sqlite3_prepare_v2(store->db,
         "DELETE FROM outbox WHERE certificate_id=? AND kind='expiry' AND recipient_email=? COLLATE NOCASE "
@@ -283,7 +357,7 @@ int delivery_queue_expiry(Store *store, int64_t cert_id, int threshold,
                           int64_t now, char *err, size_t n)
 {
     if (!valid_store(store, err, n)) return 0;
-    if (threshold != 45 && threshold != 30 && threshold != 15 && threshold != 2 && threshold != 0)
+    if (threshold < 0 || threshold > 3650)
         return error_message(err, n, "Soglia del promemoria email non valida.");
     char *name = NULL;
     int64_t expiry;
@@ -303,6 +377,133 @@ int delivery_queue_expiry(Store *store, int64_t cert_id, int threshold,
     int ok = subject && body ? queue_rows(store, cert_id, "expiry", threshold, recipients,
         count, subject, body, "", now, &queued, err, n) : error_message(err, n, "Memoria insufficiente.");
     free(subject); free(body); free(name); recipients_free(recipients, count);
+    return ok;
+}
+
+int reminder_policy_check_escalation(Store *store, int64_t cert_id,
+                                     int64_t now, int *queued, char *err, size_t n)
+{
+    if (queued) *queued = 0;
+    if (!valid_store(store, err, n)) return 0;
+    if (cert_id <= 0 || now < 0)
+        return error_message(err, n, "Dati dell'escalation non validi.");
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(store->db,
+        "SELECT policy.escalation_name,policy.escalation_email FROM reminder_policies policy "
+        "JOIN certificates certificate ON certificate.id=policy.certificate_id "
+        "WHERE policy.certificate_id=?1 AND certificate.archived=0 AND policy.enabled=1 "
+        "AND policy.escalation_email<>'' AND EXISTS(SELECT 1 FROM notifications notification "
+        "WHERE notification.certificate_id=certificate.id "
+        "AND notification.sent_at<=?2-policy.escalation_after_days*86400)",
+        -1, &stmt, NULL) != SQLITE_OK || sqlite3_bind_int64(stmt, 1, cert_id) != SQLITE_OK ||
+        sqlite3_bind_int64(stmt, 2, now) != SQLITE_OK) {
+        sqlite3_finalize(stmt); return db_error(store, err, n);
+    }
+    int result = sqlite3_step(stmt);
+    if (result == SQLITE_DONE) { sqlite3_finalize(stmt); return 1; }
+    if (result != SQLITE_ROW) { sqlite3_finalize(stmt); return db_error(store, err, n); }
+    Recipient recipient = {column_text(stmt, 0), column_text(stmt, 1)};
+    int finalized = sqlite3_finalize(stmt);
+    if (finalized != SQLITE_OK || !recipient.name || !recipient.email ||
+        strlen(recipient.name) > 512 || !valid_header(recipient.name) || !valid_email(recipient.email)) {
+        free(recipient.name); free(recipient.email);
+        return error_message(err, n, "Destinatario dell'escalation non valido.");
+    }
+    char *name = NULL;
+    int64_t expiry;
+    char date[64];
+    if (!certificate_metadata(store, cert_id, &name, &expiry, err, n) ||
+        !utc_text(expiry, date, sizeof date, 0)) {
+        free(name); free(recipient.name); free(recipient.email);
+        return error_message(err, n, "Impossibile leggere il certificato per l'escalation.");
+    }
+    char *subject = formatted("Escalation rinnovo certificato HTTPS %s", name);
+    char *body = formatted("Gentile referente,\n\nil certificato HTTPS %s scade il %s.\n"
+        "E trascorso il periodo di escalation dal primo promemoria registrato.\n"
+        "Il certificato e ancora nel registro attivo: verificare il rinnovo e l'installazione "
+        "su tutti i servizi interessati.\n\nGestione certificati HTTPS\n", name, date);
+    int added = 0;
+    int ok = subject && body ? queue_rows(store, cert_id, "escalation", -1, &recipient,
+        1, subject, body, "", now, &added, err, n) : error_message(err, n, "Memoria insufficiente.");
+    if (ok && queued) *queued = added;
+    free(subject); free(body); free(name); free(recipient.name); free(recipient.email);
+    return ok;
+}
+
+int delivery_queue_monitor_event(Store *store, int64_t event_id, int64_t now,
+                                  int *queued, char *err, size_t n)
+{
+    if (queued) *queued = 0;
+    if (!valid_store(store, err, n)) return 0;
+    if (event_id <= 0 || now < 0)
+        return error_message(err, n, "Evento del monitor non valido.");
+    sqlite3_stmt *stmt = NULL;
+    char *target = NULL, *kind = NULL, *detail = NULL, *expected = NULL, *observed = NULL;
+    char *subject = NULL, *body = NULL;
+    Recipient *recipients = NULL;
+    size_t count = 0;
+    int64_t cert_id = 0, monitor_id = 0;
+    int ok = 0, added = 0;
+    if (sqlite3_prepare_v2(store->db,
+        "SELECT monitor.id,monitor.certificate_id,monitor.target,event.kind,event.message,"
+        "event.expected_fingerprint,event.observed_fingerprint FROM monitor_events event "
+        "JOIN monitors monitor ON monitor.id=event.monitor_id WHERE event.id=? AND monitor.email_alerts=1",
+        -1, &stmt, NULL) != SQLITE_OK || sqlite3_bind_int64(stmt, 1, event_id) != SQLITE_OK) goto fail_db;
+    int result = sqlite3_step(stmt);
+    if (result == SQLITE_DONE) { ok = 1; goto done; }
+    if (result != SQLITE_ROW) goto fail_db;
+    monitor_id = sqlite3_column_int64(stmt, 0); cert_id = sqlite3_column_int64(stmt, 1);
+    target = column_text(stmt, 2); kind = column_text(stmt, 3); detail = column_text(stmt, 4);
+    expected = column_text(stmt, 5); observed = column_text(stmt, 6);
+    if (sqlite3_finalize(stmt) != SQLITE_OK) { stmt = NULL; goto fail_db; }
+    stmt = NULL;
+    if (!target || !kind || !detail || !expected || !observed || !valid_header(target)) {
+        error_message(err, n, "Dati dell'evento del monitor non validi."); goto done;
+    }
+    if (sqlite3_prepare_v2(store->db,
+        "SELECT name,email FROM monitor_recipients WHERE monitor_id=? ORDER BY email", -1,
+        &stmt, NULL) != SQLITE_OK || sqlite3_bind_int64(stmt, 1, monitor_id) != SQLITE_OK) goto fail_db;
+    while ((result = sqlite3_step(stmt)) == SQLITE_ROW) {
+        char *name = column_text(stmt, 0), *email = column_text(stmt, 1);
+        if (!name || !email || strlen(name) > 512 || !valid_header(name) || !valid_email(email)) {
+            free(name); free(email); error_message(err, n, "Destinatario del monitor non valido."); goto done;
+        }
+        Recipient *next = realloc(recipients, (count + 1) * sizeof *recipients);
+        if (!next) { free(name); free(email); error_message(err, n, "Memoria insufficiente."); goto done; }
+        recipients = next; recipients[count++] = (Recipient){name, email};
+    }
+    if (result != SQLITE_DONE) goto fail_db;
+    if (sqlite3_finalize(stmt) != SQLITE_OK) { stmt = NULL; goto fail_db; }
+    stmt = NULL;
+    subject = formatted("Monitor HTTPS %s: %s", target, !strcmp(kind, "recovered") ? "servizio ripristinato" : "anomalia rilevata");
+    body = formatted("Monitor del servizio HTTPS %s\n\n%s\n\n"
+        "Impronta prevista: %s\nImpronta osservata: %s\n\n"
+        "Controllare il servizio e il registro dei certificati. Un certificato inatteso "
+        "non viene approvato automaticamente.\n\nGestione certificati HTTPS\n", target,
+        detail, expected, observed[0] ? observed : "non disponibile");
+    if (!subject || !body) { error_message(err, n, "Memoria insufficiente."); goto done; }
+    if (sqlite3_prepare_v2(store->db,
+        "INSERT INTO outbox(certificate_id,kind,recipient_name,recipient_email,threshold,subject,body,"
+        "attachment_pem,status,attempts,last_error,created_at,next_attempt,event_id) "
+        "SELECT ?1,'monitor',?2,?3,-1,?4,?5,'','pending',0,'',?6,0,?7 "
+        "WHERE NOT EXISTS(SELECT 1 FROM outbox WHERE kind='monitor' AND event_id=?7 "
+        "AND recipient_email=?3 COLLATE NOCASE) ON CONFLICT DO NOTHING", -1, &stmt, NULL) != SQLITE_OK) goto fail_db;
+    for (size_t i = 0; i < count; ++i) {
+        sqlite3_reset(stmt); sqlite3_clear_bindings(stmt);
+        if (sqlite3_bind_int64(stmt, 1, cert_id) != SQLITE_OK || !bind_text(stmt, 2, recipients[i].name) ||
+            !bind_text(stmt, 3, recipients[i].email) || !bind_text(stmt, 4, subject) ||
+            !bind_text(stmt, 5, body) || sqlite3_bind_int64(stmt, 6, now) != SQLITE_OK ||
+            sqlite3_bind_int64(stmt, 7, event_id) != SQLITE_OK || sqlite3_step(stmt) != SQLITE_DONE) goto fail_db;
+        added += sqlite3_changes(store->db);
+    }
+    if (queued) *queued = added;
+    ok = 1;
+    goto done;
+fail_db:
+    db_error(store, err, n);
+done:
+    sqlite3_finalize(stmt); free(target); free(kind); free(detail); free(expected); free(observed);
+    free(subject); free(body); recipients_free(recipients, count);
     return ok;
 }
 
@@ -611,11 +812,8 @@ static int cleanup_queue(Store *store, int64_t now, char *err, size_t n)
     if (!ok) db_error(store, err, n);
     sqlite3_finalize(stmt);
     if (!ok) return 0;
-    const char *prune = "DELETE FROM outbox WHERE status IN('pending','failed') AND ("
-        "EXISTS(SELECT 1 FROM certificates c WHERE c.id=outbox.certificate_id AND "
-        "(c.archived<>0 OR (outbox.kind='certificate' AND (c.not_before>?1 OR c.not_after<=?1)))) OR "
-        "NOT EXISTS(SELECT 1 FROM contacts c WHERE c.certificate_id=outbox.certificate_id "
-        "AND c.email=outbox.recipient_email COLLATE NOCASE AND c.role=CASE outbox.kind WHEN 'expiry' THEN 'business' ELSE 'technical' END))";
+    const char *prune = "DELETE FROM outbox WHERE status IN('pending','failed') AND NOT "
+        DELIVERY_ELIGIBLE_SQL("?1");
     stmt = NULL;
     if (sqlite3_prepare_v2(store->db, prune, -1, &stmt, NULL) != SQLITE_OK) return db_error(store, err, n);
     ok = sqlite3_bind_int64(stmt, 1, now) == SQLITE_OK && sqlite3_step(stmt) == SQLITE_DONE;
@@ -633,11 +831,7 @@ static int claim(Store *store, int64_t now, int64_t *id, int *attempt,
         sqlite3_stmt *stmt = NULL;
         const char *select = "SELECT id,attempts FROM outbox WHERE status IN('pending','failed') "
             "AND attempts<5 AND next_attempt<=?1 "
-            "AND EXISTS(SELECT 1 FROM certificates c WHERE c.id=outbox.certificate_id AND c.archived=0 "
-            "AND (outbox.kind='expiry' OR (c.not_before<=?1 AND c.not_after>?1))) "
-            "AND EXISTS(SELECT 1 FROM contacts c WHERE c.certificate_id=outbox.certificate_id "
-            "AND c.email=outbox.recipient_email COLLATE NOCASE "
-            "AND c.role=CASE outbox.kind WHEN 'expiry' THEN 'business' ELSE 'technical' END) "
+            "AND " DELIVERY_ELIGIBLE_SQL("?1") " "
             "ORDER BY id LIMIT 1";
         if (sqlite3_prepare_v2(store->db, select, -1, &stmt, NULL) != SQLITE_OK) return db_error(store, err, n);
         if (sqlite3_bind_int64(stmt, 1, now) != SQLITE_OK) { db_error(store, err, n); sqlite3_finalize(stmt); return 0; }
@@ -649,11 +843,7 @@ static int claim(Store *store, int64_t now, int64_t *id, int *attempt,
         sqlite3_finalize(stmt); stmt = NULL;
         const char *update = "UPDATE outbox SET status='sending',attempts=attempts+1,last_error='',next_attempt=? "
             "WHERE id=? AND status IN('pending','failed') AND attempts<5 AND next_attempt<=?3 AND attempts=?4 "
-            "AND EXISTS(SELECT 1 FROM certificates c WHERE c.id=outbox.certificate_id AND c.archived=0 "
-            "AND (outbox.kind='expiry' OR (c.not_before<=?3 AND c.not_after>?3))) "
-            "AND EXISTS(SELECT 1 FROM contacts c WHERE c.certificate_id=outbox.certificate_id "
-            "AND c.email=outbox.recipient_email COLLATE NOCASE "
-            "AND c.role=CASE outbox.kind WHEN 'expiry' THEN 'business' ELSE 'technical' END)";
+            "AND " DELIVERY_ELIGIBLE_SQL("?3");
         if (sqlite3_prepare_v2(store->db, update, -1, &stmt, NULL) != SQLITE_OK) return db_error(store, err, n);
         int ok = sqlite3_bind_int64(stmt, 1, now + CLAIM_LEASE) == SQLITE_OK &&
             sqlite3_bind_int64(stmt, 2, candidate) == SQLITE_OK &&

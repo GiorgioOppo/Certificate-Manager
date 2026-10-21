@@ -53,7 +53,7 @@
     main: '/', overview: '/', registry: '/certificati', monitoring: '/servizi',
     'monitor-form': '/servizi#monitor-form', 'monitor-alerts': '/servizi#monitor-alerts',
     'remote-check': '/verifica', verify: '/verifica', acquire: '/importa',
-    'import-panel': '/importa', reminders: '/promemoria', delivery: '/email', workflow: '/workflow'
+    'import-panel': '/importa', directory: '/rubrica', reminders: '/promemoria', delivery: '/email', workflow: '/workflow'
   };
   let initialContextApplied = false;
   function initializeWorkflow() {
@@ -489,7 +489,7 @@
   }
 
   function monitorBody(monitor, enabled = !!monitor.enabled) {
-    return new URLSearchParams({ certificate_id: String(monitor.certificate_id), target: monitor.target, interval_minutes: String(Math.max(1, Math.round(Number(monitor.interval_seconds) / 60))), enabled: enabled ? '1' : '0' });
+    return new URLSearchParams({ certificate_id: String(monitor.certificate_id), target: monitor.target, interval_minutes: String(Math.max(1, Math.round(Number(monitor.interval_seconds) / 60))), enabled: enabled ? '1' : '0', email_alerts: monitor.email_alerts ? '1' : '0', email_recipients: (monitor.email_recipients || []).map(contact => contact.email).join(';') });
   }
 
   function resetMonitorForm() {
@@ -512,6 +512,8 @@
     byId('monitor-target').value = monitor.target;
     byId('monitor-interval').value = String(Math.max(1, Math.round(Number(monitor.interval_seconds) / 60)));
     byId('monitor-enabled').checked = !!monitor.enabled;
+    byId('monitor-email-enabled').checked = !!monitor.email_alerts;
+    byId('monitor-email-recipients').value = (monitor.email_recipients || []).map(contact => contact.email).join('; ');
     byId('monitor-form-title').textContent = msg('m_674048e64d83', [monitor.id]);
     byId('monitor-cancel-edit').hidden = false;
     monitorFeedback(msg('m_30fc379225a1'));
@@ -533,6 +535,8 @@
     if (!byId('monitor-form').reportValidity()) return;
     const enabled = byId('monitor-enabled').checked;
     const body = new URLSearchParams({ certificate_id: byId('monitor-certificate').value, target, interval_minutes: byId('monitor-interval').value, enabled: enabled ? '1' : '0' });
+    body.set('email_alerts', byId('monitor-email-enabled').checked ? '1' : '0');
+    body.set('email_recipients', byId('monitor-email-recipients').value.trim());
     const editing = monitorEditingId;
     monitorMutating = true;
     updateButtons();
@@ -668,6 +672,7 @@
       const timing = element('div', 'monitor-timing');
       timing.append(element('span', '', msg('m_a03ac665f29e', [monitor.last_checked_at ? date(monitor.last_checked_at, true) : msg('m_df1fe7130cdc')])), element('span', '', msg('m_3623361fbb08', [monitor.enabled ? checking ? msg('m_1254376799b0') : queued ? msg('m_a3dfb7d0b518') : date(monitor.next_check_at, true) : msg('m_61395f43e51c')])), element('span', '', msg('m_1a616dea3233', [Math.round(Number(monitor.interval_seconds) / 60)])));
       item.append(timing);
+      if (monitor.email_alerts) item.append(element('p', 'workflow-help', `${flow('monitor_email')}: ${(monitor.email_recipients || []).map(contact => contact.email).join('; ')}`));
       if (monitor.last_error) item.append(element('p', 'monitor-error', string(monitor.last_error)));
       const details = element('details', 'monitor-diagnostics');
       details.open = expandedMonitorIds.has(String(monitor.id));
@@ -1012,7 +1017,7 @@
       const daysCell = registryCell(msg('m_700358f9a24b'), `days-cell registry-days-cell${cert.status === 'expired' || cert.status === 'urgent' ? ' is-danger' : ''}`);
       daysCell.append(element('span', '', Number.isFinite(days) ? String(days) : '—'), element('span', 'days-suffix', msg('m_cbd3cfb9b9f5')));
       const status = registryCell(msg('m_5d788017bfe4'), 'registry-status-cell');
-      status.append(badge(cert.status));
+      status.append(badge(cert.status), element('span', 'operational-badge', operationalLabel(cert)));
       const actions = registryCell(msg('m_1c3e6183f58f'), 'row-actions');
       const details = element('button', 'button button-secondary registry-open-details', msg('m_7f1893e1b4be'));
       details.type = 'button';
@@ -1249,7 +1254,7 @@
       const header = element('div', 'outbox-item-heading');
       header.append(element('strong', '', string(entry.subject, entry.kind === 'certificate' ? msg('m_4fa62f7b59b2') : msg('m_55ad6e8f6641'))), element('span', `delivery-badge delivery-${Object.prototype.hasOwnProperty.call(statusLabels, entry.status) ? entry.status : 'pending'}`, statusLabels[entry.status] || msg('m_6f3524690512')));
       content.append(header, element('p', 'outbox-recipient', `${string(entry.recipient_name, msg('m_449c73e689f8'))} · ${string(entry.recipient_email)}`));
-      content.append(element('p', 'outbox-meta', msg('m_9c83efbbd253', [entry.kind === 'certificate' ? msg('m_a9a635e1d23c') : msg('m_9e66123dc753'), date(entry.created_at, true), entry.status === 'sent' ? msg('m_fd6fc605af8e', [date(entry.sent_at, true)]) : '', Number(entry.attempts) || 0])));
+      content.append(element('p', 'outbox-meta', msg('m_9c83efbbd253', [entry.kind === 'certificate' ? msg('m_a9a635e1d23c') : entry.kind === 'monitor' ? flow('monitor_email') : entry.kind === 'escalation' ? flow('policy_title') : msg('m_9e66123dc753'), date(entry.created_at, true), entry.status === 'sent' ? msg('m_fd6fc605af8e', [date(entry.sent_at, true)]) : '', Number(entry.attempts) || 0])));
       if (entry.last_error) content.append(element('p', 'outbox-error', string(entry.last_error)));
       const actions = element('div', 'outbox-actions');
       const download = element('a', 'button button-secondary', msg('m_885afe758592'));
@@ -1290,7 +1295,7 @@
         state.delivery = next.delivery || {};
         state.smtp = next.smtp || {};
         state.outbox = next.outbox || [];
-        state.monitors = Array.isArray(next.monitors) ? next.monitors : [];
+        state.monitors = (Array.isArray(next.monitors) ? next.monitors : []).map(monitor => ({ ...monitor, email_recipients: (next.monitor_mail || []).filter(contact => String(contact.monitor_id) === String(monitor.id)) }));
         state.monitor_events = Array.isArray(next.monitor_events) ? next.monitor_events : [];
         state.monitoring = next.monitoring || {};
         loaded = true;
@@ -1300,6 +1305,11 @@
         renderDelivery();
         renderMonitoring();
         renderOverview();
+        renderDirectory();
+        if (detailsCertificate && byId('details-dialog').open && !workflowDirty && !contactsDirty) {
+          detailsCertificate = state.certificates.find(cert => String(cert.id) === String(detailsCertificate.id)) || detailsCertificate;
+          renderCertificateWorkflow(detailsCertificate);
+        }
         byId('last-updated').textContent = msg('m_8a5e2da88d8b', [timeFormat.format(new Date())]);
         setConnection(true);
         if (desktopBaselinePending) {
@@ -1322,43 +1332,6 @@
     return refreshing;
   }
 
-  async function uploadFiles(fileList) {
-    const files = [...fileList];
-    if (!files.length || uploading) return;
-    if (!connected) { message(msg('m_a277990d9b87'), true); return; }
-    uploading = true;
-    updateButtons();
-    byId('drop-zone').classList.add('is-busy');
-    const progress = byId('upload-progress');
-    progress.hidden = false;
-    message('');
-    let imported = 0;
-    let duplicates = 0;
-    const errors = [];
-    for (let index = 0; index < files.length; index++) {
-      const file = files[index];
-      progress.textContent = msg('m_b592c068fa52', [index + 1, files.length, file.name]);
-      try {
-        if (!file.size) throw new Error(msg('m_e66e2728e117'));
-        if (file.size > 16 * 1024 * 1024) throw new Error(msg('m_b2997d798a03'));
-        const result = await request('/api/certificates', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(file.name) }, body: file });
-        imported += Number(result.imported) || 0;
-        duplicates += Number(result.duplicates) || 0;
-      } catch (error) { errors.push(`${file.name}: ${error.message}`); }
-    }
-    const parts = [];
-    parts.push(imported === 1 ? msg('m_fb016cacfb3e') : msg('m_5e199cdb9595', [imported]));
-    if (duplicates) parts.push(duplicates === 1 ? msg('m_1c7561731c65') : msg('m_3fee0e1061d3', [duplicates]));
-    if (errors.length) parts.push(...errors);
-    progress.textContent = parts.join(' ');
-    uploading = false;
-    byId('drop-zone').classList.remove('is-busy');
-    byId('certificate-files').value = '';
-    await refresh(true);
-    updateButtons();
-    if (errors.length) message(msg('m_eee8c73f632c', [errors.length, errors.length === 1 ? msg('m_5f84abb254ec') : msg('m_c9f5b9980887')]), true);
-  }
-
   function addDetail(container, label, value, wide = false, mono = false) {
     const field = element('div', `detail-field${wide ? ' wide' : ''}${mono ? ' monospace' : ''}`);
     field.append(element('dt', '', label), element('dd', '', string(value)));
@@ -1366,6 +1339,7 @@
   }
 
   function showDetails(cert) {
+    if (workflowDirty && !window.confirm(flow('discard_draft'))) return;
     detailsCertificate = cert;
     contactsDirty = false;
     detailsTargetId = String(cert.id);
@@ -1384,6 +1358,7 @@
       }
     }
     byId('details-chain-note').textContent = cert.chain_status === 'complete' ? msg('m_5ca600c39103') : cert.chain_status === 'legacy' ? msg('m_c107bb191d4e') : msg('m_cd1c5a532fd8');
+    if (cert.chain_status !== 'complete') { const addCA = element('a', 'text-link', flow('add_ca')); addCA.href = i18n.localURL('/importa'); byId('details-chain-note').append(document.createTextNode(' '), addCA); }
     detailFeedback('');
     const download = byId('download-certificate');
     download.hidden = !cert.pem_available;
@@ -1407,6 +1382,8 @@
     addDetail(data, msg('m_4cdd497e69c7'), cert.fingerprint, true, true);
     addDetail(data, msg('m_9b8fbb8db650'), cert.source, true);
     renderContacts(cert.contacts || []);
+    workflowDirty = false;
+    renderCertificateWorkflow(cert);
     updateDetailButtons();
     const dialog = byId('details-dialog');
     if (!dialog.open) dialog.showModal();
@@ -1519,29 +1496,6 @@
       detailFeedback(contacts.length ? `${contacts.length} ${contacts.length === 1 ? msg('m_9d84eadd0ca3') : msg('m_898e92f39a55')}.` : msg('m_b7c9f09d032c'));
     } catch (error) { detailFeedback(error.message, true); }
     finally { savingContacts = false; updateDetailButtons(); }
-  }
-
-  async function renewCertificate(file) {
-    if (!file || !detailsCertificate || renewing) return;
-    if (contactsDirty) { detailFeedback(msg('m_18b463b18f6c'), true); return; }
-    const cert = detailsCertificate;
-    renewing = true;
-    updateDetailButtons();
-    detailFeedback(msg('m_bd9220903c7a', [file.name]));
-    try {
-      if (!file.size) throw new Error(msg('m_e66e2728e117'));
-      if (file.size > 16 * 1024 * 1024) throw new Error(msg('m_b2997d798a03'));
-      const result = await request(`/api/certificates/${encodeURIComponent(cert.id)}/renew`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(file.name) }, body: file });
-      await refresh(true);
-      const renewed = state.certificates.find(item => String(item.id) === String(result.certificate_id));
-      const queued = Number(result.queued) || 0;
-      const noQueue = (renewed && (renewed.contacts || []).some(contact => contact.role === 'technical')) ? msg('m_25c0d51ddf62') : msg('m_fcb4df75f8b4');
-      const text = msg('m_7fc1b9869816', [queued ? msg('m_f98b9d04e86e', [queued, queued === 1 ? msg('m_cb0974078de8') : msg('m_f8db05be308d')]) : noQueue, state.delivery.configured ? msg('m_6218ff5e17c0') : msg('m_e9d2c019001a')]);
-      if (renewed) showDetails(renewed);
-      detailFeedback(text);
-      message(text);
-    } catch (error) { detailFeedback(error.message, true); }
-    finally { renewing = false; byId('renewal-file').value = ''; updateDetailButtons(); }
   }
 
   async function distributeCertificate() {
@@ -1764,7 +1718,7 @@
   }
 
   on('choose-files', 'click', () => byId('certificate-files').click());
-  on('certificate-files', 'change', event => uploadFiles(event.target.files));
+  on('certificate-files', 'change', event => previewFiles(event.target.files));
   on('search', 'input', () => { saveRegistryFilters(); renderTable(); });
   on('status-filter', 'change', () => { saveRegistryFilters(); renderTable(); });
   on('expiry-filter', 'change', () => { saveRegistryFilters(); renderTable(); });
@@ -1791,11 +1745,543 @@
     saveRegistryFilters();
     renderTable();
   });
+  // Acquisition and deployment are separate: importing a renewal never implies installation.
+  const flow = (key, values) => msg(`flow.${key}`, values);
+  let workflowBusy = false;
+  let workflowDirty = false;
+  let workflowDirtyForm = null;
+  function lockWorkflowForm(form) {
+    workflowDirty = true; workflowDirtyForm = form;
+    for (const other of document.querySelectorAll('.workflow-form')) {
+      if (other !== form) for (const field of other.querySelectorAll('input, select, textarea, button')) field.disabled = true;
+    }
+  }
+  function discardWorkflowDraft() {
+    workflowDirty = false; workflowDirtyForm = null; directoryEditingPerson = null; directoryEditingGroup = null;
+    if (detailsCertificate && byId('details-dialog').open) renderCertificateWorkflow(detailsCertificate);
+    renderDirectory();
+  }
+  let importDrafts = [];
+  let inventoryRows = [];
+  let inventoryRunning = false;
+  let inventoryStopped = false;
+  let directoryEditingPerson = null;
+  let directoryEditingGroup = null;
+  const operationalLabels = () => ({ registered: flow('registered'), in_use: flow('in_use'), installed: flow('in_use'), ready: flow('ready'), staged: flow('ready'), pending_installation: flow('ready'), deploying: flow('deploying'), retired: flow('retired'), archived: flow('retired') });
+  function operationalLabel(cert) {
+    const status = cert.operational_status || cert.deployment_status || (cert.archived ? 'archived' : 'registered');
+    return operationalLabels()[status] || status;
+  }
+  function formField(label, type = 'text', value = '', options = {}) {
+    const wrapper = element('label', options.wide ? 'workflow-form-field wide' : 'workflow-form-field');
+    const title = element('span', '', label);
+    const input = element(type === 'textarea' ? 'textarea' : 'input');
+    if (type !== 'textarea') input.type = type;
+    input.value = value === null || value === undefined ? '' : String(value);
+    input.maxLength = options.maxLength || (type === 'textarea' ? 4000 : 254);
+    if (options.required) input.required = true;
+    wrapper.append(title, input);
+    return { wrapper, input };
+  }
+  function action(label, handler, primary = false) {
+    const button = element('button', `button ${primary ? 'button-primary' : 'button-secondary'}`, label);
+    button.type = 'button';
+    button.addEventListener('click', handler);
+    return button;
+  }
+  function appendOption(select, value, label) {
+    const option = element('option', '', label);
+    option.value = String(value);
+    select.append(option);
+  }
+  async function workflowRequest(path, method, body, feedback = detailFeedback, sourceForm = null) {
+    if (workflowDirty && workflowDirtyForm !== sourceForm) { feedback(flow('save_current_form'), true); return false; }
+    if (workflowBusy || savingContacts || renewing || distributing || uploading) return false;
+    workflowBusy = true;
+    try {
+      await request(path, { method, headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+      workflowDirty = false; workflowDirtyForm = null;
+      await refresh(true);
+      if (detailsCertificate) {
+        detailsCertificate = state.certificates.find(cert => String(cert.id) === String(detailsCertificate.id)) || detailsCertificate;
+        renderCertificateWorkflow(detailsCertificate);
+      }
+      feedback(flow('saved'));
+      return true;
+    } catch (error) { feedback(error.message, true); return false; }
+    finally { workflowBusy = false; }
+  }
+
+  async function previewFiles(fileList, previousId = null) {
+    const files = [...fileList];
+    if (!files.length || uploading || inventoryRunning) return;
+    if (!connected) { message(msg('m_a277990d9b87'), true); return; }
+    uploading = true;
+    updateButtons();
+    const drafts = [];
+    const errors = [];
+    for (const file of files) {
+      try {
+        if (!file.size || file.size > 16 * 1024 * 1024) throw new Error(msg('m_b2997d798a03'));
+        const result = await request('/api/import/preview', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(file.name) }, body: file });
+        drafts.push({ file, result, previousId });
+      } catch (error) { errors.push(`${file.name}: ${error.message}`); }
+    }
+    uploading = false;
+    if (byId('certificate-files')) byId('certificate-files').value = '';
+    if (byId('renewal-file')) byId('renewal-file').value = '';
+    byId('preview-chain-files').value = '';
+    updateButtons();
+    if (errors.length) message(errors.join('\n'), true);
+    if (!drafts.length) return;
+    importDrafts.push(...drafts);
+    renderImportPreview();
+    if (byId('details-dialog').open) byId('details-dialog').close();
+    if (!byId('import-preview-dialog').open) byId('import-preview-dialog').showModal();
+  }
+  function renderImportPreview() {
+    const content = byId('import-preview-list');
+    content.replaceChildren();
+    let count = 0;
+    for (const draft of importDrafts) {
+      const card = element('article', 'import-preview-card');
+      card.append(element('h4', '', draft.file.name));
+      const certificates = draft.result.certificates || [];
+      count += certificates.length;
+      for (const cert of certificates) {
+        const data = element('dl', 'details-data');
+        addDetail(data, msg('m_c52778252d3b'), cert.common_name);
+        addDetail(data, msg('m_8693b331d694'), date(cert.not_before, true));
+        addDetail(data, msg('m_9f1341d2d44b'), date(cert.not_after, true));
+        addDetail(data, msg('m_e4946c348010'), cert.root_ca);
+        addDetail(data, msg('m_4600e1a76847'), cert.intermediate_ca);
+        addDetail(data, msg('m_2ab68816f88b'), cert.issuer, true);
+        addDetail(data, msg('m_ffe7dccec599'), cert.sans, true);
+        addDetail(data, msg('m_4cdd497e69c7'), cert.fingerprint, true, true);
+        card.append(element('strong', '', name(cert)), data);
+        const duplicate = cert.duplicate_id || cert.existing_id;
+        card.append(element('p', `chain-note${duplicate ? '' : ' import-new-note'}`, duplicate ? flow('duplicate', [duplicate]) : flow('new_certificate')));
+        if (!cert.is_ca && cert.chain_status !== 'complete' && !cert.chain_complete) card.append(element('p', 'import-chain-warning', flow('missing_chain', [string(cert.issuer)])));
+      }
+      const selectLabel = element('label', 'workflow-form-field', flow('import_choice'));
+      const select = element('select');
+      appendOption(select, '', flow('import_new'));
+      const leaf = certificates.find(cert => !cert.is_ca);
+      const candidates = draft.result.renewal_candidates || (leaf && leaf.renewal_candidates) || [];
+      const candidateIds = new Set(candidates.map(candidate => String(typeof candidate === 'object' ? candidate.id || candidate.certificate_id : candidate)));
+      if (draft.previousId) candidateIds.add(String(draft.previousId));
+      for (const id of candidateIds) {
+        const cert = state.certificates.find(item => String(item.id) === id);
+        if (cert && !cert.archived && !cert.is_ca) appendOption(select, id, flow('link_previous', [name(cert), id, date(cert.not_after)]));
+      }
+      if (draft.previousId) select.value = String(draft.previousId);
+      draft.selection = select;
+      selectLabel.append(select);
+      if (leaf && !(leaf.duplicate_id || leaf.existing_id)) card.append(selectLabel);
+      card.append(element('p', 'workflow-help', flow('overlap_help')), element('p', 'workflow-help', flow('chain_preview_help')));
+      content.append(card);
+    }
+    byId('import-preview-count').textContent = String(count);
+  }
+  async function confirmImportPreview() {
+    if (uploading || !importDrafts.length) return;
+    uploading = true;
+    updateButtons();
+    byId('confirm-import').disabled = true;
+    byId('add-preview-chain').disabled = true;
+    byId('cancel-import-preview').disabled = true;
+    const errors = [];
+    const successful = [];
+    for (const draft of importDrafts) {
+      try {
+        const previousId = draft.selection.value;
+        const result = await request(previousId ? `/api/certificates/${encodeURIComponent(previousId)}/renew` : '/api/certificates', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(draft.file.name) }, body: draft.file });
+        successful.push(result);
+      } catch (error) { errors.push(`${draft.file.name}: ${error.message}`); }
+    }
+    uploading = false;
+    byId('confirm-import').disabled = false;
+    byId('add-preview-chain').disabled = false;
+    byId('cancel-import-preview').disabled = false;
+    importDrafts = [];
+    byId('import-preview-dialog').close();
+    if (byId('certificate-files')) byId('certificate-files').value = '';
+    if (byId('renewal-file')) byId('renewal-file').value = '';
+    await refresh(true);
+    updateButtons();
+    message(errors.length ? errors.join('\n') : flow('import_complete', [successful.length]), errors.length > 0);
+    if (successful.length === 1 && successful[0].certificate_id) {
+      const cert = state.certificates.find(item => String(item.id) === String(successful[0].certificate_id));
+      if (cert) showDetails(cert);
+    }
+  }
+
+  // RFC 4180 quoting, CRLF, embedded newlines and optional UTF-8 BOM.
+  function parseInventoryCSV(source) {
+    const text = source.replace(/^\uFEFF/, '');
+    const rows = []; let row = []; let value = ''; let quoted = false; let closed = false;
+    for (let index = 0; index <= text.length; index++) {
+      const character = index === text.length ? '\n' : text[index];
+      if (quoted) {
+        if (index === text.length) throw new Error(flow('csv_quote_error'));
+        if (character === '"' && text[index + 1] === '"') { value += '"'; index++; }
+        else if (character === '"') { quoted = false; closed = true; }
+        else value += character;
+      } else if (character === '"' && !value && !closed) quoted = true;
+      else if (character === ',' || character === '\n' || character === '\r') {
+        row.push(value); value = ''; closed = false;
+        if (character !== ',') {
+          if (row.some(item => item.trim())) rows.push(row);
+          row = [];
+          if (character === '\r' && text[index + 1] === '\n') index++;
+        }
+      } else if (closed || character === '"') throw new Error(flow('csv_quote_error'));
+      else value += character;
+    }
+    if (rows.length < 2) throw new Error(flow('csv_empty'));
+    const header = rows.shift().map(value => value.trim().toLowerCase());
+    if (new Set(header).size !== header.length || !header.includes('url') || header.some(key => !['url', 'business_name', 'business_email', 'technical_name', 'technical_email'].includes(key))) throw new Error(flow('csv_header'));
+    if (rows.length > 100) throw new Error(flow('csv_limit'));
+    return rows.map((values, index) => {
+      const row = { line: index + 2, contacts: [], result: null, imported: false, error: '', target: '' };
+      if (values.length !== header.length) row.error = flow('csv_columns');
+      const data = Object.fromEntries(header.map((key, offset) => [key, (values[offset] || '').trim()]));
+      row.target = data.url;
+      try {
+        const candidate = new URL(/^https:\/\//i.test(data.url) ? data.url : `https://${data.url}`);
+        if ((/^[a-z][a-z0-9+.-]*:\/\//i.test(data.url) && !/^https:\/\//i.test(data.url)) || !data.url || candidate.protocol !== 'https:' || candidate.username || candidate.password || candidate.hostname.includes('*') || /[\s\u0000-\u001f]/.test(data.url)) throw new Error();
+      } catch (_) { row.error = flow('csv_target_error'); }
+      for (const role of ['business', 'technical']) {
+        const emails = (data[`${role}_email`] || '').split(';').map(value => value.trim()).filter(Boolean);
+        const names = (data[`${role}_name`] || '').split(';').map(value => value.trim());
+        for (const [offset, email] of emails.entries()) {
+          if (!/^[^\s@;,]+@[^\s@;,]+\.[^\s@;,]+$/.test(email)) row.error = flow('csv_email_error');
+          row.contacts.push({ role, name: names[offset] || '', email });
+        }
+      }
+      return row;
+    });
+  }
+  function renderInventory() {
+    const content = byId('inventory-results');
+    if (!content) return;
+    content.replaceChildren();
+    for (const row of inventoryRows) {
+      const card = element('article', `inventory-row${row.error ? ' is-error' : ''}`);
+      card.append(element('strong', '', `${row.line} · ${row.target}`));
+      if (row.error) card.append(element('p', '', row.error));
+      else if (row.imported) card.append(element('p', '', flow('csv_imported')));
+      else if (row.result) {
+        const cert = row.result.certificate || (row.result.certificates || [])[0];
+        card.append(element('p', '', `${cert ? name(cert) : ''} · ${cert ? date(cert.not_after) : '—'}`));
+        if (cert) { const metadata = element('dl', 'details-data'); addDetail(metadata, msg('m_2ab68816f88b'), cert.issuer, true); addDetail(metadata, msg('m_8693b331d694'), date(cert.not_before)); addDetail(metadata, msg('m_4cdd497e69c7'), cert.fingerprint, true, true); card.append(metadata); }
+        if (row.result.verification_error) card.append(element('p', 'import-chain-warning', row.result.verification_error));
+        if (row.result.verified === false) card.append(element('p', 'import-chain-warning', flow('csv_unverified')));
+      } else card.append(element('p', '', flow('csv_ready')));
+      if (row.contacts.length) card.append(element('p', 'workflow-help', row.contacts.map(contact => `${contact.role === 'technical' ? msg('m_a6da5b872c69') : msg('m_3ce1f3185cbc')}: ${contact.email}`).join(' · ')));
+      content.append(card);
+    }
+    const valid = inventoryRows.length && inventoryRows.every(row => !row.error);
+    byId('inventory-check').disabled = inventoryRunning || !valid;
+    byId('inventory-import').disabled = inventoryRunning || !inventoryRows.some(row => row.result && !row.error && !row.imported);
+    byId('inventory-preview').disabled = inventoryRunning;
+    byId('inventory-text').disabled = inventoryRunning;
+    byId('inventory-file').disabled = inventoryRunning;
+    byId('inventory-cancel').hidden = !inventoryRunning;
+  }
+  function previewInventory() {
+    if (inventoryRunning) return;
+    try {
+      inventoryRows = parseInventoryCSV(byId('inventory-text').value);
+      byId('inventory-feedback').textContent = flow('csv_validated', [inventoryRows.length]);
+    } catch (error) { inventoryRows = []; byId('inventory-feedback').textContent = error.message; }
+    renderInventory();
+  }
+  async function runInventory(importing) {
+    if (inventoryRunning || uploading || !inventoryRows.length) return;
+    inventoryRunning = true; inventoryStopped = false;
+    renderInventory();
+    for (const [index, row] of inventoryRows.entries()) {
+      if (inventoryStopped) break;
+      if (row.error || row.imported || (importing && !row.result)) continue;
+      byId('inventory-feedback').textContent = flow(importing ? 'csv_import_progress' : 'csv_progress', [index + 1, inventoryRows.length]);
+      try {
+        if (!importing) {
+          row.result = await request('/api/remote/check', { method: 'POST', body: new URLSearchParams({ target: row.target }) }, true);
+          if (!row.result.token) throw new Error(row.result.error || flow('csv_no_certificate'));
+        } else {
+          // Snapshots expire after ten minutes: always refresh immediately before explicit import.
+          const checkedFingerprint = row.result.certificate && row.result.certificate.fingerprint;
+          row.result = await request('/api/remote/check', { method: 'POST', body: new URLSearchParams({ target: row.target }) }, true);
+          if (!row.result.token) throw new Error(row.result.error || flow('csv_no_certificate'));
+          if (checkedFingerprint && (!row.result.certificate || checkedFingerprint !== row.result.certificate.fingerprint)) throw new Error(flow('csv_certificate_changed'));
+          const body = new URLSearchParams({ token: row.result.token });
+          const imported = await request('/api/remote/import', { method: 'POST', body });
+          if (imported.monitoring_error) throw new Error(imported.monitoring_error);
+          if (row.contacts.length && imported.certificate_id) {
+            await refresh(true);
+            const current = state.certificates.find(cert => String(cert.id) === String(imported.certificate_id));
+            const contacts = new Map((current && current.contacts || []).map(contact => [`${contact.role}:${contact.email.toLowerCase()}`, contact]));
+            for (const contact of row.contacts) contacts.set(`${contact.role}:${contact.email.toLowerCase()}`, contact);
+            const assignments = new URLSearchParams();
+            for (const contact of contacts.values()) { assignments.append('role', contact.role); assignments.append('name', contact.name || ''); assignments.append('email', contact.email); }
+            await request(`/api/certificates/${encodeURIComponent(imported.certificate_id)}/contacts`, { method: 'PUT', body: assignments });
+          }
+          row.imported = true;
+        }
+      } catch (error) { row.error = error.message; }
+      renderInventory();
+    }
+    inventoryRunning = false;
+    byId('inventory-feedback').textContent = inventoryStopped ? flow('csv_stopped') : flow('csv_done');
+    renderInventory();
+    if (importing) await refresh(true);
+  }
+  function jobStatusLabel(value) { return flow(`job_${value || 'requested'}`); }
+  function dateInputValue(value) {
+    if (!Number(value)) return '';
+    const parsed = new Date(Number(value) * 1000);
+    return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
+  }
+  function inputEpoch(value) { return value ? String(Math.floor(new Date(`${value}T12:00:00`).getTime() / 1000)) : ''; }
+  function renderCertificateWorkflow(cert) {
+    renderRenewalCase(cert);
+    renderReminderPolicy(cert);
+    renderDirectoryAssignment(cert);
+  }
+  function renderRenewalCase(cert) {
+    const container = byId('process-content');
+    container.replaceChildren();
+    if (cert.is_ca) { container.append(element('p', 'workflow-help', flow('ca_no_case'))); return; }
+    container.append(element('p', 'workflow-help', flow('overlap_help')));
+    const jobs = (state.renewal_jobs || []).filter(job => String(job.old_certificate_id) === String(cert.id) || String(job.new_certificate_id) === String(cert.id));
+    const job = jobs.find(item => !item.finished_at) || jobs[0];
+    const summary = element('div', 'process-summary');
+    summary.append(element('span', 'operational-badge', operationalLabel(cert)));
+    if (job) {
+      summary.append(element('strong', '', `${flow('case_number', [job.id])} · ${jobStatusLabel(job.status)}`));
+      for (const [kind, id] of [['previous', job.old_certificate_id], ['replacement', job.new_certificate_id]]) {
+        const linked = state.certificates.find(item => String(item.id) === String(id));
+        if (linked) summary.append(action(flow(kind, [name(linked), id]), () => showDetails(linked)));
+      }
+    }
+    container.append(summary);
+    const form = element('form', 'workflow-form');
+    const fields = element('div', 'workflow-form-grid');
+    const responsible = formField(flow('responsible'), 'text', job && job.responsible, { maxLength: 200 });
+    const requested = formField(flow('requested_at'), 'date', dateInputValue(job && job.requested_at));
+    const renewal = formField(flow('planned_renewal_at'), 'date', dateInputValue(job && job.planned_renewal_at));
+    const install = formField(flow('planned_install_at'), 'date', dateInputValue(job && job.planned_install_at));
+    const notes = formField(flow('notes'), 'textarea', job && job.notes, { wide: true });
+    const statusLabel = element('label', 'workflow-form-field', flow('case_status'));
+    const status = element('select');
+    for (const value of ['requested', 'awaiting_ca', 'signed', 'delivered', 'installing']) appendOption(status, value, jobStatusLabel(value));
+    if (job && ['verified', 'retired'].includes(job.status)) appendOption(status, job.status, jobStatusLabel(job.status));
+    status.value = job && job.status || 'requested';
+    statusLabel.append(status);
+    fields.append(responsible.wrapper, statusLabel, requested.wrapper, renewal.wrapper, install.wrapper, notes.wrapper);
+    form.append(fields);
+    if (!job || !job.new_certificate_id) {
+      const candidateLabel = element('label', 'workflow-form-field', flow('link_existing'));
+      const candidate = element('select');
+      appendOption(candidate, '', flow('no_replacement'));
+      const predecessor = state.certificates.find(item => String(item.id) === String(job ? job.old_certificate_id : cert.id)) || cert;
+      for (const replacement of state.certificates.filter(item => !item.is_ca && !item.archived && item.id !== predecessor.id && item.common_name === predecessor.common_name && Number(item.not_after) > Number(predecessor.not_after))) {
+        appendOption(candidate, replacement.id, `${name(replacement)} · ID ${replacement.id} · ${date(replacement.not_after)}`);
+      }
+      candidateLabel.append(candidate); form.append(candidateLabel);
+      form.replacementSelector = candidate;
+    }
+    const save = element('button', 'button button-primary', job ? flow('save_case') : flow('create_case'));
+    save.type = 'submit';
+    save.disabled = !!cert.archived || !!(job && job.finished_at);
+    form.append(save, action(flow('cancel'), discardWorkflowDraft));
+    form.addEventListener('input', () => lockWorkflowForm(form));
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      if (!form.reportValidity()) return;
+      const body = new URLSearchParams({ old_certificate_id: String(job ? job.old_certificate_id : cert.id), status: status.value, responsible: responsible.input.value.trim(), requested_at: inputEpoch(requested.input.value), planned_renewal_at: inputEpoch(renewal.input.value), planned_install_at: inputEpoch(install.input.value), notes: notes.input.value.trim() });
+      if (form.replacementSelector && form.replacementSelector.value) { body.set('new_certificate_id', form.replacementSelector.value); if (['requested', 'awaiting_ca'].includes(body.get('status'))) body.set('status', 'signed'); }
+      workflowRequest(job ? `/api/renewal-jobs/${encodeURIComponent(job.id)}` : '/api/renewal-jobs', job ? 'PUT' : 'POST', body, detailFeedback, form);
+    });
+    container.append(form);
+    if (!job || !job.new_certificate_id) return;
+    const endpoints = (state.renewal_endpoints || []).filter(endpoint => String(endpoint.job_id) === String(job.id));
+    const endpointList = element('ul', 'deployment-endpoints');
+    for (const endpoint of endpoints) {
+      const item = element('li');
+      const info = element('div');
+      info.append(element('strong', '', endpoint.target), element('p', '', endpoint.verified_at ? flow('endpoint_verified', [date(endpoint.verified_at, true)]) : flow('endpoint_waiting')));
+      const observed = endpoint.last_fingerprint;
+      if (observed) info.append(element('p', '', observed === job.new_fingerprint ? flow('observed_new') : observed === job.old_fingerprint ? flow('observed_previous') : flow('observed_unexpected')));
+      if (!endpoint.enabled) info.append(element('p', 'import-chain-warning', flow('endpoint_paused')));
+      const verify = action(flow('verify_install'), () => workflowRequest(`/api/renewal-jobs/${encodeURIComponent(job.id)}/check-install`, 'POST', new URLSearchParams({ monitor_id: String(endpoint.monitor_id) })));
+      verify.disabled = !!job.finished_at || !endpoint.enabled;
+      item.append(info, verify); endpointList.append(item);
+    }
+    container.append(element('h4', '', flow('deployment_title')), element('p', 'workflow-help', flow('deployment_help')), endpointList);
+    const actions = element('div', 'action-row');
+    if (!endpoints.length) {
+      container.append(element('p', 'import-chain-warning', flow('no_endpoints')));
+      const retire = action(flow('retire_manual'), () => {
+        if (window.confirm(flow('retire_confirm'))) workflowRequest(`/api/renewal-jobs/${encodeURIComponent(job.id)}/retire`, 'POST', new URLSearchParams());
+      });
+      retire.disabled = !!job.finished_at;
+      actions.append(retire);
+    } else {
+      const check = action(flow('verify_all'), () => workflowRequest(`/api/renewal-jobs/${encodeURIComponent(job.id)}/check-install`, 'POST', new URLSearchParams({ monitor_id: '0' })));
+      const complete = action(flow('complete_case'), () => workflowRequest(`/api/renewal-jobs/${encodeURIComponent(job.id)}/complete`, 'POST', new URLSearchParams()), true);
+      check.disabled = !!job.finished_at;
+      complete.disabled = !!job.finished_at || endpoints.some(endpoint => !endpoint.verified_at);
+      actions.append(check, complete);
+    }
+    container.append(actions);
+  }
+  function renderReminderPolicy(cert) {
+    const container = byId('policy-content');
+    const policy = (state.reminder_policies || []).find(item => String(item.certificate_id) === String(cert.id)) || { thresholds: '45,30,15,2,0', enabled: true, escalation_after_days: 7 };
+    const form = element('form', 'workflow-form');
+    const fields = element('div', 'workflow-form-grid');
+    const thresholds = formField(flow('thresholds'), 'text', policy.thresholds, { required: true });
+    thresholds.input.pattern = '\\s*\\d+\\s*(,\\s*\\d+\\s*)*';
+    const escalationEmail = formField(flow('escalation_email'), 'email', policy.escalation_email);
+    const escalationName = formField(flow('escalation_name'), 'text', policy.escalation_name, { maxLength: 120 });
+    const delay = formField(flow('escalation_delay'), 'number', policy.escalation_after_days);
+    delay.input.min = '0'; delay.input.max = '365'; delay.input.step = '1'; delay.input.required = true;
+    fields.append(thresholds.wrapper, escalationEmail.wrapper, escalationName.wrapper, delay.wrapper);
+    const enabled = element('label', 'checkbox-field');
+    const checkbox = element('input'); checkbox.type = 'checkbox'; checkbox.checked = policy.enabled !== false && policy.enabled !== 0;
+    enabled.append(checkbox, element('span', '', flow('reminders_enabled')));
+    const save = element('button', 'button button-primary', flow('save_policy')); save.type = 'submit';
+    form.append(element('p', 'workflow-help', flow('policy_help')), fields, enabled, save, action(flow('cancel'), discardWorkflowDraft));
+    form.addEventListener('input', () => lockWorkflowForm(form));
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      if (!form.reportValidity()) return;
+      workflowRequest(`/api/certificates/${encodeURIComponent(cert.id)}/reminder-policy`, 'PUT', new URLSearchParams({ thresholds: thresholds.input.value.trim(), enabled: checkbox.checked ? '1' : '0', escalation_email: escalationEmail.input.value.trim(), escalation_name: escalationName.input.value.trim(), escalation_after_days: delay.input.value }), detailFeedback, form);
+    });
+    container.replaceChildren(form);
+  }
+  function renderDirectoryAssignment(cert) {
+    const container = byId('directory-assign-content');
+    const form = element('form', 'workflow-form');
+    const roleLabel = element('label', 'workflow-form-field', flow('role'));
+    const role = element('select');
+    appendOption(role, 'business', msg('m_3ce1f3185cbc')); appendOption(role, 'technical', msg('m_a6da5b872c69'));
+    roleLabel.append(role); form.append(roleLabel);
+    const choices = element('div', 'directory-choices');
+    for (const [kind, list] of [['person_id', state.people || []], ['group_id', state.groups || []]]) {
+      for (const item of list) {
+        const label = element('label', 'checkbox-field');
+        const input = element('input'); input.type = 'checkbox'; input.name = kind; input.value = String(item.id);
+        label.append(input, element('span', '', kind === 'person_id' ? `${item.name || ''} · ${item.email}` : flow('group_label', [item.name])));
+        choices.append(label);
+      }
+    }
+    form.append(element('p', 'workflow-help', flow('assignment_help')), choices);
+    const save = element('button', 'button button-primary', flow('assign_selected')); save.type = 'submit'; save.disabled = !(state.people || []).length && !(state.groups || []).length;
+    form.append(save);
+    const link = element('a', 'text-link', flow('open_directory')); link.href = i18n.localURL('/rubrica'); form.append(link);
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      if (contactsDirty) { detailFeedback(msg('m_ab8f05842744'), true); return; }
+      const body = new URLSearchParams({ role: role.value });
+      for (const checkbox of choices.querySelectorAll('input:checked')) body.append(checkbox.name, checkbox.value);
+      workflowRequest(`/api/certificates/${encodeURIComponent(cert.id)}/assignments`, 'POST', body).then(ok => { if (ok) renderContacts(detailsCertificate.contacts || []); });
+    });
+    container.replaceChildren(form);
+  }
+  function renderDirectory() {
+    const container = byId('directory-content');
+    if (!container || directoryEditingPerson !== null || directoryEditingGroup !== null || workflowDirty) return;
+    container.replaceChildren();
+    const feedback = (text, error) => message(text, error);
+    const grid = element('div', 'directory-grid');
+    const peoplePanel = element('section', 'panel directory-panel');
+    peoplePanel.append(element('h2', '', flow('people')), element('p', 'workflow-help', flow('people_help')));
+    const personForm = element('form', 'workflow-form');
+    const personName = formField(msg('m_44a2b0eef0b9'), 'text', '', { maxLength: 120 });
+    const personEmail = formField(msg('m_969ccbd3cf63'), 'email', '', { required: true });
+    const personChoices = element('div', 'directory-choices');
+    for (const group of state.groups || []) {
+      const label = element('label', 'checkbox-field'); const checkbox = element('input'); checkbox.type = 'checkbox'; checkbox.value = String(group.id);
+      label.append(checkbox, element('span', '', group.name)); personChoices.append(label);
+    }
+    const personSave = element('button', 'button button-primary', flow('save_person')); personSave.type = 'submit';
+    const personCancel = action(flow('cancel'), () => { discardWorkflowDraft(); }); personCancel.hidden = true;
+    personForm.append(personName.wrapper, personEmail.wrapper, personChoices, personSave, personCancel);
+    personForm.addEventListener('input', () => { personCancel.hidden = false; lockWorkflowForm(personForm); });
+    personForm.addEventListener('submit', async event => {
+      event.preventDefault(); if (!personForm.reportValidity()) return;
+      const body = new URLSearchParams({ name: personName.input.value.trim(), email: personEmail.input.value.trim() });
+      for (const checkbox of personChoices.querySelectorAll('input:checked')) body.append('group_id', checkbox.value);
+      const id = directoryEditingPerson;
+      if (await workflowRequest(id ? `/api/people/${encodeURIComponent(id)}` : '/api/people', id ? 'PUT' : 'POST', body, feedback, personForm)) { discardWorkflowDraft(); }
+    });
+    peoplePanel.append(personForm);
+    const people = element('ul', 'directory-list');
+    for (const person of state.people || []) {
+      const item = element('li'); const info = element('div'); info.append(element('strong', '', person.name || person.email), element('p', '', person.email));
+      const edit = action(flow('edit'), () => {
+        if (workflowDirty && workflowDirtyForm !== personForm) { message(flow('save_current_form'), true); return; }
+        directoryEditingPerson = person.id; lockWorkflowForm(personForm); personCancel.hidden = false;
+        personName.input.value = person.name || ''; personEmail.input.value = person.email;
+        for (const checkbox of personChoices.querySelectorAll('input')) checkbox.checked = (person.group_ids || []).map(String).includes(checkbox.value);
+        personName.input.focus();
+      });
+      const remove = action(flow('remove'), async () => {
+        if (workflowDirty) { message(flow('save_current_form'), true); return; }
+        if (!window.confirm(flow('delete_person_confirm', [person.email]))) return;
+        await workflowRequest(`/api/people/${encodeURIComponent(person.id)}`, 'DELETE', new URLSearchParams(), feedback);
+      });
+      item.append(info, edit, remove); people.append(item);
+    }
+    peoplePanel.append(people);
+    const groupPanel = element('section', 'panel directory-panel');
+    groupPanel.append(element('h2', '', flow('groups')), element('p', 'workflow-help', flow('groups_help')));
+    const groupForm = element('form', 'workflow-form');
+    const groupName = formField(flow('group_name'), 'text', '', { required: true, maxLength: 120 });
+    const members = element('div', 'directory-choices');
+    for (const person of state.people || []) {
+      const label = element('label', 'checkbox-field'); const checkbox = element('input'); checkbox.type = 'checkbox'; checkbox.value = String(person.id);
+      label.append(checkbox, element('span', '', `${person.name || ''} · ${person.email}`)); members.append(label);
+    }
+    const groupSave = element('button', 'button button-primary', flow('save_group')); groupSave.type = 'submit';
+    const groupCancel = action(flow('cancel'), () => { discardWorkflowDraft(); }); groupCancel.hidden = true;
+    groupForm.append(groupName.wrapper, members, groupSave, groupCancel);
+    groupForm.addEventListener('input', () => { groupCancel.hidden = false; lockWorkflowForm(groupForm); });
+    groupForm.addEventListener('submit', async event => {
+      event.preventDefault(); if (!groupForm.reportValidity()) return;
+      const body = new URLSearchParams({ name: groupName.input.value.trim() });
+      for (const checkbox of members.querySelectorAll('input:checked')) body.append('person_id', checkbox.value);
+      const id = directoryEditingGroup;
+      if (await workflowRequest(id ? `/api/groups/${encodeURIComponent(id)}` : '/api/groups', id ? 'PUT' : 'POST', body, feedback, groupForm)) { discardWorkflowDraft(); }
+    });
+    groupPanel.append(groupForm);
+    const groups = element('ul', 'directory-list');
+    for (const group of state.groups || []) {
+      const item = element('li'); const info = element('div'); info.append(element('strong', '', group.name), element('p', '', flow('member_count', [(group.member_ids || []).length])));
+      const edit = action(flow('edit'), () => {
+        if (workflowDirty && workflowDirtyForm !== groupForm) { message(flow('save_current_form'), true); return; }
+        directoryEditingGroup = group.id; lockWorkflowForm(groupForm); groupCancel.hidden = false; groupName.input.value = group.name;
+        for (const checkbox of members.querySelectorAll('input')) checkbox.checked = (group.member_ids || []).map(String).includes(checkbox.value);
+        groupName.input.focus();
+      });
+      const remove = action(flow('remove'), async () => {
+        if (workflowDirty) { message(flow('save_current_form'), true); return; }
+        if (!window.confirm(flow('delete_group_confirm', [group.name]))) return;
+        await workflowRequest(`/api/groups/${encodeURIComponent(group.id)}`, 'DELETE', new URLSearchParams(), feedback);
+      });
+      item.append(info, edit, remove); groups.append(item);
+    }
+    groupPanel.append(groups); grid.append(peoplePanel, groupPanel); container.append(grid);
+  }
+
   on('contacts-form', 'submit', saveContacts);
   on('add-business-contact', 'click', () => addContact('business', {}, true));
   on('add-technical-contact', 'click', () => addContact('technical', {}, true));
   on('choose-renewal', 'click', () => byId('renewal-file').click());
-  on('renewal-file', 'change', event => renewCertificate(event.target.files[0]));
+  on('renewal-file', 'change', event => previewFiles(event.target.files, detailsCertificate && detailsCertificate.id));
   on('distribute-certificate', 'click', distributeCertificate);
   on('process-delivery', 'click', processDelivery);
   on('smtp-form', 'submit', saveSmtp);
@@ -1828,6 +2314,7 @@
   on('close-details', 'click', () => byId('details-dialog').close());
   on('details-done', 'click', () => byId('details-dialog').close());
   on('details-dialog', 'close', () => {
+    workflowDirty = false;
     if (skipDetailsFocusRestore) skipDetailsFocusRestore = false;
     else restoreRowFocus(detailsTargetId, 'details');
   });
@@ -1844,7 +2331,7 @@
     zone.addEventListener('dragenter', event => { event.preventDefault(); dragDepth++; if (!uploading) zone.classList.add('is-dragging'); });
     zone.addEventListener('dragover', event => { event.preventDefault(); event.dataTransfer.dropEffect = uploading ? 'none' : 'copy'; });
     zone.addEventListener('dragleave', event => { event.preventDefault(); dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) zone.classList.remove('is-dragging'); });
-    zone.addEventListener('drop', event => { event.preventDefault(); dragDepth = 0; zone.classList.remove('is-dragging'); uploadFiles(event.dataTransfer.files); });
+    zone.addEventListener('drop', event => { event.preventDefault(); dragDepth = 0; zone.classList.remove('is-dragging'); previewFiles(event.dataTransfer.files); });
   }
   // Prevent a dropped certificate outside the drop area from replacing the app.
   window.addEventListener('dragover', event => event.preventDefault());
@@ -1852,13 +2339,31 @@
   window.addEventListener('online', () => refresh());
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
   window.addEventListener('certificate-language-change', event => {
-    if ((contactsDirty && byId('details-dialog').open) || smtpDirty || monitorDraftDirty) {
+    if ((contactsDirty && byId('details-dialog').open) || smtpDirty || monitorDraftDirty || workflowDirty || importDrafts.length) {
       event.preventDefault();
       message(i18n.serverMessage('Salva o annulla le modifiche prima di cambiare lingua.'), true);
-    } else if (uploading || checking || deleting || savingContacts || renewing || distributing || processingDelivery || smtpBusy || remoteChecking || remoteImporting || monitorMutating || monitorDeleting) {
+    } else if (inventoryRunning || workflowBusy || uploading || checking || deleting || savingContacts || renewing || distributing || processingDelivery || smtpBusy || remoteChecking || remoteImporting || monitorMutating || monitorDeleting) {
       event.preventDefault();
       message(i18n.serverMessage('Modifica della lingua non disponibile durante un’operazione. Attendi il completamento.'), true);
     }
+  });
+  on('confirm-import', 'click', confirmImportPreview);
+  on('cancel-import-preview', 'click', () => { if (!uploading) { importDrafts = []; byId('import-preview-dialog').close(); } });
+  on('import-preview-dialog', 'cancel', event => { if (uploading) event.preventDefault(); else importDrafts = []; });
+  on('inventory-preview', 'click', previewInventory);
+  on('inventory-text', 'input', () => { inventoryRows = []; renderInventory(); });
+  on('preview-chain-files', 'change', event => previewFiles(event.target.files));
+  on('add-preview-chain', 'click', () => byId('preview-chain-files').click());
+  on('inventory-check', 'click', () => runInventory(false));
+  on('inventory-import', 'click', () => runInventory(true));
+  on('inventory-cancel', 'click', () => { inventoryStopped = true; });
+  on('inventory-file', 'change', async event => {
+    const file = event.target.files[0]; if (!file) return;
+    if (file.size > 1024 * 1024) { byId('inventory-feedback').textContent = flow('csv_size'); return; }
+    byId('inventory-text').value = await file.text(); previewInventory();
+  });
+  window.addEventListener('beforeunload', event => {
+    if (workflowDirty || importDrafts.length || inventoryRunning) { event.preventDefault(); event.returnValue = ''; }
   });
   initializeWorkflow();
   restoreRegistryFilters();

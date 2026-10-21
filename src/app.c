@@ -3,6 +3,8 @@
 #include "chain.h"
 #include "delivery.h"
 #include "smtp_settings.h"
+#include "lifecycle.h"
+#include "workspace.h"
 #include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
@@ -81,12 +83,14 @@ int app_check(Store *s, int64_t now, int *count, FILE *log,
     }
     int rc;
     while ((rc = sqlite3_step(read)) == SQLITE_ROW) {
-        int64_t remaining = sqlite3_column_int64(read, 2) - now;
-        int threshold = -1;
-        const int thresholds[] = {45, 30, 15, 2, 0};
-        for (size_t i = 0; i < sizeof thresholds / sizeof thresholds[0]; i++)
-            if (remaining <= thresholds[i] * INT64_C(86400)) threshold = thresholds[i];
-        if (threshold < 0) continue;
+        int threshold = -1, escalated = 0;
+        if (!reminder_policy_due(s, sqlite3_column_int64(read, 0), sqlite3_column_int64(read, 2),
+                                 now, &threshold, err, n)) goto fail;
+        if (threshold < 0) {
+            if (!reminder_policy_check_escalation(s, sqlite3_column_int64(read, 0), now,
+                                                   &escalated, err, n)) goto fail;
+            continue;
+        }
         sqlite3_reset(write);
         sqlite3_clear_bindings(write);
         if (sqlite3_bind_int64(write, 1, sqlite3_column_int64(read, 0)) != SQLITE_OK ||
@@ -103,8 +107,9 @@ int app_check(Store *s, int64_t now, int *count, FILE *log,
                     threshold == 0 ? "certificato scaduto" : "rinnovo da pianificare",
                     app_days_remaining(sqlite3_column_int64(read, 2), now));
         }
-        if (!delivery_queue_expiry(s, sqlite3_column_int64(read, 0), threshold, now, err, n))
-            goto fail;
+        if (!delivery_queue_expiry(s, sqlite3_column_int64(read, 0), threshold, now, err, n) ||
+            !reminder_policy_check_escalation(s, sqlite3_column_int64(read, 0), now,
+                                               &escalated, err, n)) goto fail;
     }
     if (rc != SQLITE_DONE) {
         db_error(s, err, n);
@@ -134,20 +139,6 @@ fail:
     sqlite3_exec(s->db, "ROLLBACK", NULL, NULL, NULL);
     *count = 0;
     return 0;
-}
-
-static int bind_id_step(Store *s, const char *sql, int64_t first, int64_t second,
-                         char *err, size_t n) {
-    sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(s->db, sql, -1, &stmt, NULL) != SQLITE_OK)
-        return db_error(s, err, n);
-    int ok = sqlite3_bind_int64(stmt, 1, first) == SQLITE_OK;
-    if (sqlite3_bind_parameter_count(stmt) > 1)
-        ok = ok && sqlite3_bind_int64(stmt, 2, second) == SQLITE_OK;
-    if (ok) ok = sqlite3_step(stmt) == SQLITE_DONE;
-    if (!ok) db_error(s, err, n);
-    sqlite3_finalize(stmt);
-    return ok;
 }
 
 int app_distribute(Store *s, int64_t id, int *queued, char *err, size_t n) {
@@ -187,30 +178,6 @@ done:
         *queued = 0;
     }
     return ok;
-}
-
-static int transfer_monitors(Store *s, int64_t old_id, int64_t new_id,
-                             int64_t now, char *err, size_t n) {
-    static const char *const sql[] = {
-        /* Keep conflicting old monitors and their history on the archived record. */
-        "UPDATE monitors SET enabled=0,revision=revision+1,claim_until=0,updated_at=?3 "
-        "WHERE certificate_id=?1 AND target IN(SELECT target FROM monitors WHERE certificate_id=?2)",
-        "UPDATE monitors SET certificate_id=?2,revision=revision+1,claim_until=0,next_check_at=?3,"
-        "last_checked_at=NULL,last_status='pending',last_error='',last_fingerprint='',last_address='',"
-        "dns_ok=0,tcp_ok=0,tls_ok=0,verified=0,updated_at=?3 "
-        "WHERE certificate_id=?1 AND target NOT IN(SELECT target FROM monitors WHERE certificate_id=?2)"
-    };
-    for (size_t i = 0; i < sizeof sql / sizeof sql[0]; i++) {
-        sqlite3_stmt *stmt = NULL;
-        int ok = sqlite3_prepare_v2(s->db, sql[i], -1, &stmt, NULL) == SQLITE_OK &&
-                 sqlite3_bind_int64(stmt, 1, old_id) == SQLITE_OK &&
-                 sqlite3_bind_int64(stmt, 2, new_id) == SQLITE_OK &&
-                 sqlite3_bind_int64(stmt, 3, now) == SQLITE_OK && sqlite3_step(stmt) == SQLITE_DONE;
-        if (!ok) db_error(s, err, n);
-        sqlite3_finalize(stmt);
-        if (!ok) return 0;
-    }
-    return 1;
 }
 
 int app_renew(Store *s, int64_t old_id, const char *file, const char *source,
@@ -257,28 +224,8 @@ int app_renew(Store *s, int64_t old_id, const char *file, const char *source,
         if (!store_add(s, &list.items[i], source, now, &id, &inserted, err, n)) goto done;
         if (&list.items[i] == leaf) *new_id = id;
     }
-    if (*new_id == old_id) { snprintf(err, n, "È stato caricato lo stesso certificato."); goto done; }
-    if (!bind_id_step(s, "UPDATE certificates SET archived=1,superseded_by=?1 WHERE id=?2", *new_id, old_id, err, n) ||
-        !bind_id_step(s, "UPDATE certificates SET archived=0,superseded_by=NULL WHERE id=?1", *new_id, 0, err, n) ||
-        !bind_id_step(s, "INSERT INTO contacts(certificate_id,role,name,email) SELECT ?1,role,name,email FROM contacts WHERE certificate_id=?2 "
-                          "ON CONFLICT(certificate_id,role,email) DO UPDATE SET name=excluded.name", *new_id, old_id, err, n) ||
-        !bind_id_step(s, "DELETE FROM outbox WHERE certificate_id=?1 AND status IN('pending','failed')", old_id, 0, err, n)) goto done;
-    /* A renewal without technical contacts remains usable; recipients can be added later. */
-    sqlite3_stmt *contacts = NULL;
-    if (sqlite3_prepare_v2(s->db, "SELECT count(*),coalesce(sum(role='technical'),0) FROM contacts WHERE certificate_id=?1",
-                           -1, &contacts, NULL) != SQLITE_OK) { db_error(s, err, n); goto done; }
-    if (sqlite3_bind_int64(contacts, 1, *new_id) != SQLITE_OK || sqlite3_step(contacts) != SQLITE_ROW) {
-        db_error(s, err, n); sqlite3_finalize(contacts); goto done;
-    }
-    int total_contacts = sqlite3_column_int(contacts, 0);
-    int has_technical = sqlite3_column_int(contacts, 1) > 0;
-    if (sqlite3_finalize(contacts) != SQLITE_OK) { db_error(s, err, n); goto done; }
-    if (total_contacts > 100) {
-        snprintf(err, n, "Il rinnovo unirebbe più di 100 referenti: riduci gli elenchi prima di riprovare.");
-        goto done;
-    }
-    if (!transfer_monitors(s, old_id, *new_id, now, err, n)) goto done;
-    if (has_technical && !app_distribute(s, *new_id, queued, err, n)) goto done;
+    int64_t job_id = 0;
+    if (!lifecycle_link_existing(s, old_id, *new_id, &job_id, queued, err, n)) goto done;
     ok = store_exec(s, "COMMIT", err, n);
 done:
     sqlite3_finalize(old);
@@ -423,7 +370,11 @@ char *app_state_json(Store *s, const char *token, size_t *length,
     fprintf(out, ",\"now\":%" PRId64 ",\"certificates\":", now);
     int ok = json_rows(s, out, "SELECT id,fingerprint,common_name,subject,issuer,serial,sans,key_algorithm,key_bits,"
                        "signature_algorithm,is_ca,not_before,not_after,source,added_at,archived,superseded_by,"
-                       "(length(pem)>0) AS pem_available FROM certificates ORDER BY not_after,id", 1, now, err, n);
+                       "(length(pem)>0) AS pem_available,CASE WHEN archived=1 THEN 'retired' "
+                       "WHEN EXISTS(SELECT 1 FROM renewal_jobs j WHERE j.new_certificate_id=certificates.id AND j.status='installing') THEN 'deploying' "
+                       "WHEN EXISTS(SELECT 1 FROM monitors m WHERE m.certificate_id=certificates.id) THEN 'in_use' "
+                       "WHEN EXISTS(SELECT 1 FROM renewal_jobs j WHERE j.new_certificate_id=certificates.id AND j.status IN('signed','delivered')) THEN 'ready' "
+                       "ELSE 'in_use' END AS operational_status FROM certificates ORDER BY not_after,id", 1, now, err, n);
     if (ok) {
         fputs(",\"notifications\":", out);
         ok = json_rows(s, out, "SELECT n.rowid AS id,n.certificate_id,n.threshold,n.sent_at,"
@@ -463,7 +414,7 @@ char *app_state_json(Store *s, const char *token, size_t *length,
     if (ok) {
         fputs(",\"outbox\":", out);
         ok = json_rows(s, out, "SELECT id,certificate_id,kind,recipient_name,recipient_email,threshold,subject,"
-                       "status,attempts,last_error,created_at,sent_at FROM outbox ORDER BY id DESC LIMIT 200",
+                       "status,attempts,last_error,created_at,sent_at,event_id FROM outbox ORDER BY id DESC LIMIT 200",
                        0, now, err, n);
     }
     if (ok) {
@@ -480,6 +431,8 @@ char *app_state_json(Store *s, const char *token, size_t *length,
         sqlite3_finalize(counts);
     }
     if (ok) ok = json_smtp_settings(s, out, err, n);
+    if (ok) ok = lifecycle_state_append(s, out, err, n);
+    if (ok) ok = workspace_state_append(s, out, err, n);
     fputc('}', out);
     if (ferror(out)) ok = 0;
     if (fclose(out) != 0) ok = 0;

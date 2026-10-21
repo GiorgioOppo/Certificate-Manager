@@ -17,6 +17,7 @@ PAGES = {
     "/promemoria": ("reminders", "notification-list"),
     "/email": ("delivery", "outbox-list"),
     "/workflow": ("workflow", "workflow-components"),
+    "/rubrica": ("directory", "directory-content"),
 }
 
 

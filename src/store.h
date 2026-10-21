@@ -19,6 +19,7 @@ typedef struct {
     const char *email;
 } StoreContact;
 
+int store_email_valid(const char *email);
 int store_open(Store *store, const char *path, char *err, size_t errlen);
 void store_close(Store *store);
 int store_exec(Store *store, const char *sql, char *err, size_t errlen);

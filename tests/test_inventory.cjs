@@ -1,0 +1,17 @@
+const fs = require('node:fs'); const assert = require('node:assert/strict');
+const source = fs.readFileSync(require('node:path').join(__dirname, '../web/app.js'),'utf8');
+const start = source.indexOf('  function parseInventoryCSV('); const end = source.indexOf('  function renderInventory(', start);
+const parse = new Function('flow', source.slice(start,end) + '\nreturn parseInventoryCSV;')((key)=>key);
+let rows=parse('\ufeffurl,business_name,business_email,technical_name,technical_email\r\n"https://one.example/a,b","A ""Quoted"" Name",a@example.com,"Tech\nTwo",tech@example.com\r\n');
+assert.equal(rows.length,1); assert.equal(rows[0].contacts[0].name,'A "Quoted" Name'); assert.equal(rows[0].contacts[1].name,'Tech\nTwo'); assert.equal(rows[0].error,'');
+rows=parse('url,business_email\nexample.com,"a@example.com;b@example.com"');assert.equal(rows[0].contacts.length,2);
+assert.throws(()=>parse('url,url\na,b'));
+assert.throws(()=>parse('url,misspelled_email\na,b'));
+assert.throws(()=>parse('url\n"unclosed'));
+assert.equal(parse('url\nhttp://example.com')[0].error,'csv_target_error');
+assert.equal(parse('url\nhttps://u:p@example.com')[0].error,'csv_target_error');
+assert.equal(parse('url\n*.example.com')[0].error,'csv_target_error');
+assert.equal(parse('url\nhttps://[::1]:8443')[0].error,'');
+assert.equal(parse('url,business_email\nexample.com,bad')[0].error,'csv_email_error');
+assert.throws(()=>parse('url\n'+Array(101).fill('example.com').join('\n')));
+console.log('CSV parsing: quoted commas, escapes, CRLF, BOM, multiline, multiple contacts, duplicate/unknown headers, malformed data, unsafe schemes, credentials, wildcard, IPv6 and limits passed.');

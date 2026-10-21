@@ -24,6 +24,67 @@ def database(path):
         connection.close()
 
 
+def legacy_layout(connection, version):
+    """Recreate empty v3/v4 tables using their historical DDL (SQLite >=3.24)."""
+    assert version in (3, 4)
+    for table in ("directory_assignments", "certificate_groups", "directory_memberships",
+                  "directory_groups", "directory_people", "renewal_endpoints", "renewal_jobs",
+                  "reminder_policies", "monitor_recipients"):
+        connection.execute(f"DROP TABLE {table}")
+    if version == 3:
+        connection.execute("DROP TABLE smtp_settings")
+    for table in ("outbox", "monitor_events", "monitors", "notifications"):
+        connection.execute(f"DROP TABLE {table}")
+    connection.execute("CREATE TABLE monitors (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                       "certificate_id INTEGER NOT NULL REFERENCES certificates(id) ON DELETE CASCADE,"
+                       "target TEXT NOT NULL,interval_seconds INTEGER NOT NULL DEFAULT 900 "
+                       "CHECK(interval_seconds BETWEEN 60 AND 86400),enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN(0,1)),"
+                       "revision INTEGER NOT NULL DEFAULT 1 CHECK(revision>0),next_check_at INTEGER NOT NULL DEFAULT 0,"
+                       "last_checked_at INTEGER,last_status TEXT NOT NULL DEFAULT 'pending' CHECK(last_status IN"
+                       "('pending','ok','unreachable','tls_error','changed','verification_error','error')),"
+                       "last_error TEXT NOT NULL DEFAULT '',last_fingerprint TEXT NOT NULL DEFAULT '',"
+                       "last_address TEXT NOT NULL DEFAULT '',dns_ok INTEGER NOT NULL DEFAULT 0,"
+                       "tcp_ok INTEGER NOT NULL DEFAULT 0,tls_ok INTEGER NOT NULL DEFAULT 0,"
+                       "verified INTEGER NOT NULL DEFAULT 0,claim_until INTEGER NOT NULL DEFAULT 0,"
+                       "created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,UNIQUE(certificate_id,target))")
+    connection.execute("CREATE INDEX monitors_due ON monitors(enabled,next_check_at,claim_until)")
+    connection.execute("CREATE TABLE monitor_events (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                       "monitor_id INTEGER NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,"
+                       "kind TEXT NOT NULL CHECK(kind IN"
+                       "('unreachable','tls_error','changed','verification_error','error','recovered')),"
+                       "message TEXT NOT NULL,expected_fingerprint TEXT NOT NULL,"
+                       "observed_fingerprint TEXT NOT NULL DEFAULT '',created_at INTEGER NOT NULL,acknowledged_at INTEGER)")
+    connection.execute("CREATE INDEX monitor_events_recent ON monitor_events(created_at,id)")
+    connection.execute("CREATE TABLE outbox (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                       "certificate_id INTEGER NOT NULL REFERENCES certificates(id) ON DELETE CASCADE,"
+                       "kind TEXT NOT NULL CHECK(kind IN('expiry','certificate')),"
+                       "recipient_name TEXT NOT NULL,recipient_email TEXT NOT NULL,threshold INTEGER NOT NULL DEFAULT -1,"
+                       "subject TEXT NOT NULL,body TEXT NOT NULL,attachment_pem TEXT NOT NULL DEFAULT '',"
+                       "status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN('pending','sending','sent','failed')),"
+                       "attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',created_at INTEGER NOT NULL,"
+                       "sent_at INTEGER,next_attempt INTEGER NOT NULL DEFAULT 0,UNIQUE(certificate_id,kind,recipient_email,threshold))")
+    connection.execute("CREATE TABLE notifications(certificate_id INTEGER NOT NULL REFERENCES certificates(id) ON DELETE CASCADE,"
+                       "threshold INTEGER NOT NULL CHECK(threshold IN(45,30,15,2,0)),sent_at INTEGER NOT NULL,"
+                       "PRIMARY KEY(certificate_id,threshold))")
+    connection.execute(f"PRAGMA user_version={version}")
+
+
+def legacy_records(connection, now):
+    connection.execute("INSERT INTO certificates(fingerprint,common_name,subject,issuer,serial,sans,key_algorithm,"
+                       "key_bits,signature_algorithm,is_ca,not_before,not_after,source,added_at) "
+                       "VALUES('fixture-sha','service.example.test','','','1','','RSA',2048,'sha256',0,0,2500000000,'fixture',?)", (now,))
+    connection.execute("INSERT INTO contacts VALUES(1,'business','Owner','owner@example.test')")
+    connection.execute("INSERT INTO contacts VALUES(1,'technical','Operations','ops@example.test')")
+    connection.execute("INSERT INTO notifications VALUES(1,15,?)", (now,))
+    connection.execute("INSERT INTO outbox(certificate_id,kind,recipient_name,recipient_email,threshold,subject,body,"
+                       "status,attempts,created_at,sent_at) VALUES(1,'expiry','Owner','owner@example.test',15,"
+                       "'Historical reminder','Original text','sent',1,?,?)", (now, now))
+    connection.execute("INSERT INTO monitors(certificate_id,target,enabled,created_at,updated_at) "
+                       "VALUES(1,'https://service.example.test:443',0,?,?)", (now, now))
+    connection.execute("INSERT INTO monitor_events(monitor_id,kind,message,expected_fingerprint,created_at) "
+                       "VALUES(1,'unreachable','Historical event','fixture-sha',?)", (now,))
+
+
 class SmtpSettingsTests(unittest.TestCase):
     setUp = core.ApplicationTests.setUp
     tearDown = core.ApplicationTests.tearDown
@@ -195,24 +256,56 @@ class SmtpSettingsTests(unittest.TestCase):
         self.stop_server()
         now = 1800000000
         with database(self.db) as connection:
-            connection.execute("INSERT INTO certificates(fingerprint,common_name,subject,issuer,serial,sans,key_algorithm,"
-                               "key_bits,signature_algorithm,is_ca,not_before,not_after,source,added_at) "
-                               "VALUES('fixture-sha','service.example.test','','','1','','RSA',2048,'sha256',0,0,2500000000,'fixture',?)", (now,))
-            connection.execute("INSERT INTO contacts VALUES(1,'business','Owner','owner@example.test')")
-            connection.execute("INSERT INTO notifications VALUES(1,15,?)", (now,))
-            connection.execute("INSERT INTO monitors(certificate_id,target,enabled,created_at,updated_at) "
-                               "VALUES(1,'https://service.example.test:443',0,?,?)", (now, now))
-            connection.execute("INSERT INTO monitor_events(monitor_id,kind,message,expected_fingerprint,created_at) "
-                               "VALUES(1,'unreachable','Historical event','fixture-sha',?)", (now,))
-            connection.execute("DROP TABLE smtp_settings")
-            connection.execute("PRAGMA user_version=3")
+            # Changing user_version alone would leave v5 additions behind.
+            legacy_layout(connection, 3)
+            legacy_records(connection, now)
         tables = ("certificates", "contacts", "notifications", "outbox", "monitors", "monitor_events")
+        columns = {table: [row["name"] for row in self.rows(f"PRAGMA table_info({table})")] for table in tables}
         before = {table: self.rows(f"SELECT * FROM {table} ORDER BY rowid") for table in tables}
         self.start()
-        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 4)
+        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 5)
         self.assertEqual(self.state()["smtp"]["source"], "none")
         for table in tables:
-            self.assertEqual(self.rows(f"SELECT * FROM {table} ORDER BY rowid"), before[table], table)
+            legacy_columns = ",".join(columns[table])
+            self.assertEqual(self.rows(f"SELECT {legacy_columns} FROM {table} ORDER BY rowid"), before[table], table)
+        self.assertEqual(self.rows("SELECT email_alerts FROM monitors"), [{"email_alerts": 0}])
+        self.assertEqual(self.rows("SELECT event_id FROM outbox"), [{"event_id": None}])
+        self.assertEqual(self.state()["monitor_mail"], [])
+
+
+    def test_schema_v4_upgrade_preserves_smtp_secret_queue_and_monitoring(self):
+        self.start()
+        profile = self.profile()
+        self.save(profile)  # Paused configuration: no SMTP connection or email.
+        self.stop_server()
+        key_before = self.key_path().read_bytes()
+        mode_before = stat.S_IMODE(self.key_path().stat().st_mode)
+        with database(self.db) as connection:
+            legacy_layout(connection, 4)
+            legacy_records(connection, 1800000000)
+            connection.execute("INSERT INTO outbox(certificate_id,kind,recipient_name,recipient_email,threshold,subject,body,"
+                               "attachment_pem,status,attempts,last_error,created_at,next_attempt) "
+                               "VALUES(1,'certificate','Operations','ops@example.test',-1,'Public certificate','Original body',"
+                               "'Public fixture','failed',2,'Historical SMTP failure',1800000000,2500000000)")
+        tables = ("certificates", "contacts", "notifications", "outbox", "monitors", "monitor_events", "smtp_settings")
+        columns = {table: [row["name"] for row in self.rows(f"PRAGMA table_info({table})")] for table in tables}
+        before = {table: self.rows(f"SELECT * FROM {table} ORDER BY rowid") for table in tables}
+        self.start()
+        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 5)
+        for table in tables:
+            self.assertEqual(self.rows(f"SELECT {','.join(columns[table])} FROM {table} ORDER BY rowid"), before[table], table)
+        self.assertEqual(self.key_path().read_bytes(), key_before)
+        self.assertEqual(stat.S_IMODE(self.key_path().stat().st_mode), mode_before)
+        self.assertEqual(self.rows("SELECT email_alerts FROM monitors"), [{"email_alerts": 0}])
+        self.assertEqual(self.rows("SELECT event_id FROM outbox ORDER BY id"), [{"event_id": None}, {"event_id": None}])
+        self.assertEqual(self.rows("PRAGMA foreign_key_check"), [])
+        smtp = self.state()["smtp"]
+        self.assertEqual(smtp["source"], "database")
+        self.assertTrue(smtp["password_set"])
+        self.assertFalse(smtp["enabled"])
+        # Retaining the secret requires successfully decrypting the migrated blob.
+        self.save({**profile, "password": ""})
+        self.assertEqual(self.key_path().read_bytes(), key_before)
 
 
 if __name__ == "__main__":

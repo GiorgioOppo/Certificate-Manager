@@ -121,7 +121,8 @@ static void test_expiry_queue_and_obsolete_thresholds(void)
     REQUIRE(scalar(&store, "SELECT count(*) FROM outbox WHERE threshold=15") == 2);
     REQUIRE(delivery_queue_expiry(&store, 1, 45, now, error, sizeof error));
     REQUIRE(scalar(&store, "SELECT count(*) FROM outbox") == 3);
-    REQUIRE(!delivery_queue_expiry(&store, 1, 44, now, error, sizeof error));
+    REQUIRE(!delivery_queue_expiry(&store, 1, -1, now, error, sizeof error));
+    REQUIRE(!delivery_queue_expiry(&store, 1, 3651, now, error, sizeof error));
     int sent = -1;
     REQUIRE(!delivery_is_configured(&store));
     REQUIRE(delivery_process(&store, now, &sent, error, sizeof error) && sent == 0);
@@ -152,6 +153,138 @@ static char *decode_body(const char *message, size_t *decoded_length)
     if (decoded_length) *decoded_length = (size_t)result;
     free(compact);
     return (char *)decoded;
+}
+
+static void test_custom_reminders_and_escalation(void)
+{
+    Store store;
+    setup(&store);
+    int threshold = -2, queued = -1, sent = -1;
+    int64_t expiry = now + INT64_C(30) * 86400;
+    REQUIRE(reminder_policy_due(&store, 1, expiry, now, &threshold, error, sizeof error));
+    REQUIRE(threshold == 30);
+    sql(&store, "INSERT INTO reminder_policies(certificate_id,thresholds,escalation_email,"
+        "escalation_name,escalation_after_days) VALUES(1,'60,21,7,0','manager@example.test','Responsabile',2)");
+    REQUIRE(reminder_policy_due(&store, 1, expiry, now, &threshold, error, sizeof error));
+    REQUIRE(threshold == 60);
+    REQUIRE(reminder_policy_due(&store, 1, expiry, expiry-21*86400-1, &threshold, error, sizeof error));
+    REQUIRE(threshold == 60);
+    REQUIRE(reminder_policy_due(&store, 1, expiry, expiry-21*86400, &threshold, error, sizeof error));
+    REQUIRE(threshold == 21);
+    REQUIRE(reminder_policy_due(&store, 1, expiry, expiry+1, &threshold, error, sizeof error));
+    REQUIRE(threshold == 0);
+    REQUIRE(reminder_policy_check_escalation(&store, 1, now, &queued, error, sizeof error) && queued == 0);
+    sql(&store, "INSERT INTO notifications VALUES(1,60,2100000000)");
+    REQUIRE(reminder_policy_check_escalation(&store, 1, now+2*86400-1, &queued, error, sizeof error) && queued == 0);
+    REQUIRE(reminder_policy_check_escalation(&store, 1, now+2*86400, &queued, error, sizeof error) && queued == 1);
+    REQUIRE(scalar(&store, "SELECT count(*) FROM outbox WHERE kind='escalation' AND event_id IS NULL") == 1);
+    /* Escalation destinations are deliberately independent of certificate roles. */
+    REQUIRE(delivery_process(&store, now+2*86400, &sent, error, sizeof error) && sent == 0);
+    REQUIRE(scalar(&store, "SELECT count(*) FROM outbox") == 1);
+    REQUIRE(scalar(&store, "SELECT attempts FROM outbox") == 0);
+    sql(&store, "UPDATE outbox SET status='sent',sent_at=2100172800;"
+        "UPDATE reminder_policies SET escalation_email='MANAGER@EXAMPLE.TEST'");
+    REQUIRE(reminder_policy_check_escalation(&store, 1, now+3*86400, &queued, error, sizeof error) && queued == 0);
+    sql(&store, "UPDATE reminder_policies SET enabled=0");
+    REQUIRE(reminder_policy_due(&store, 1, expiry, now, &threshold, error, sizeof error) && threshold == -1);
+    REQUIRE(reminder_policy_check_escalation(&store, 1, now+3*86400, &queued, error, sizeof error) && queued == 0);
+    sql(&store, "UPDATE reminder_policies SET enabled=1,thresholds='21,7,0';"
+        "INSERT INTO contacts VALUES(1,'business','Referente','business@example.test')");
+    REQUIRE(delivery_queue_expiry(&store, 1, 21, now, error, sizeof error));
+    REQUIRE(delivery_queue_expiry(&store, 1, 7, now, error, sizeof error));
+    REQUIRE(delivery_queue_expiry(&store, 1, 21, now, error, sizeof error));
+    REQUIRE(scalar(&store, "SELECT count(*) FROM outbox WHERE kind='expiry' AND threshold=21") == 0);
+    REQUIRE(scalar(&store, "SELECT count(*) FROM outbox WHERE kind='expiry' AND threshold=7") == 1);
+    const char *bad[] = {"", "21,7", "21,7,7,0", "3651,0", "-1,0", "7,0,", "7,x,0", "7,0, "};
+    for (size_t i = 0; i < sizeof bad / sizeof *bad; ++i) {
+        sqlite3_stmt *stmt = NULL;
+        REQUIRE(sqlite3_prepare_v2(store.db, "UPDATE reminder_policies SET thresholds=?", -1, &stmt, NULL) == SQLITE_OK);
+        REQUIRE(sqlite3_bind_text(stmt, 1, bad[i], -1, SQLITE_STATIC) == SQLITE_OK);
+        REQUIRE(sqlite3_step(stmt) == SQLITE_DONE);
+        REQUIRE(sqlite3_finalize(stmt) == SQLITE_OK);
+        REQUIRE(!reminder_policy_due(&store, 1, expiry, now, &threshold, error, sizeof error));
+    }
+    /* Pausing rules also removes unsent expiry mail; historical sends stay. */
+    sql(&store, "UPDATE reminder_policies SET enabled=0,thresholds='45,30,15,2,0'");
+    REQUIRE(delivery_process(&store, now+3*86400, &sent, error, sizeof error));
+    REQUIRE(scalar(&store, "SELECT count(*) FROM outbox WHERE kind='expiry'") == 0);
+    REQUIRE(scalar(&store, "SELECT count(*) FROM outbox WHERE status='sent'") == 1);
+    store_close(&store);
+}
+
+static void test_monitor_event_queue_recipients_and_recovery(void)
+{
+    Store store;
+    setup(&store);
+    sql(&store, "INSERT INTO monitors(certificate_id,target,created_at,updated_at) "
+        "VALUES(1,'https://www.example.test',2100000000,2100000000);"
+        "INSERT INTO monitor_recipients VALUES(1,'Responsabile','owner@example.test');"
+        "INSERT INTO monitor_recipients VALUES(1,'Tecnico','tech@example.test');"
+        "INSERT INTO monitor_events(monitor_id,kind,message,expected_fingerprint,observed_fingerprint,created_at) "
+        "VALUES(1,'changed','Certificato inatteso','AA:BB','CC:DD',2100000000)");
+    int queued = -1, sent = -1;
+    REQUIRE(delivery_queue_monitor_event(&store, 1, now, &queued, error, sizeof error) && queued == 0);
+    sql(&store, "UPDATE monitors SET email_alerts=1");
+    REQUIRE(delivery_queue_monitor_event(&store, 1, now, &queued, error, sizeof error) && queued == 2);
+    sql(&store, "UPDATE monitor_recipients SET email='OWNER@EXAMPLE.TEST' WHERE email='owner@example.test'");
+    REQUIRE(delivery_queue_monitor_event(&store, 1, now, &queued, error, sizeof error) && queued == 0);
+    REQUIRE(scalar(&store, "SELECT count(*) FROM outbox WHERE kind='monitor' AND event_id=1") == 2);
+    size_t length = 0;
+    char *message = delivery_message(&store, scalar(&store, "SELECT min(id) FROM outbox"), &length, error, sizeof error);
+    REQUIRE(message && length == strlen(message));
+    char *body = decode_body(message, NULL);
+    REQUIRE(strstr(body, "https://www.example.test") && strstr(body, "AA:BB") && strstr(body, "CC:DD"));
+    REQUIRE(!strstr(message, "application/x-pem-file"));
+    free(body); free(message);
+    sql(&store, "INSERT INTO monitor_events(monitor_id,kind,message,expected_fingerprint,observed_fingerprint,created_at) "
+        "VALUES(1,'recovered','Servizio ripristinato','AA:BB','AA:BB',2100000001)");
+    REQUIRE(delivery_queue_monitor_event(&store, 2, now+1, &queued, error, sizeof error) && queued == 2);
+    REQUIRE(scalar(&store, "SELECT count(*) FROM outbox WHERE kind='monitor'") == 4);
+    REQUIRE(delivery_process(&store, now+1, &sent, error, sizeof error) && sent == 0);
+    REQUIRE(scalar(&store, "SELECT count(*) FROM outbox") == 4);
+    REQUIRE(scalar(&store, "SELECT sum(attempts) FROM outbox") == 0);
+    sql(&store, "UPDATE outbox SET status='sent',sent_at=2100000001 WHERE id=1;"
+        "DELETE FROM monitor_recipients WHERE email='tech@example.test'");
+    REQUIRE(delivery_process(&store, now+2, &sent, error, sizeof error));
+    REQUIRE(scalar(&store, "SELECT count(*) FROM outbox") == 2);
+    sql(&store, "UPDATE monitors SET email_alerts=0");
+    REQUIRE(delivery_process(&store, now+3, &sent, error, sizeof error));
+    REQUIRE(scalar(&store, "SELECT count(*) FROM outbox") == 1);
+    REQUIRE(scalar(&store, "SELECT status='sent' FROM outbox"));
+    sql(&store, "UPDATE monitors SET email_alerts=1;"
+        "INSERT INTO monitor_recipients VALUES(1,'Invalid'||char(13)||char(10)||'Bcc: leak','bad@example.test')");
+    REQUIRE(!delivery_queue_monitor_event(&store, 2, now+4, &queued, error, sizeof error));
+    REQUIRE(scalar(&store, "SELECT count(*) FROM outbox") == 1);
+    store_close(&store);
+}
+
+static void test_notification_claims_recheck_configuration(void)
+{
+    Store store;
+    setup(&store);
+    sql(&store, "INSERT INTO reminder_policies(certificate_id,escalation_email,escalation_after_days) "
+        "VALUES(1,'manager@example.test',0);INSERT INTO notifications VALUES(1,30,2100000000);"
+        "INSERT INTO monitors(certificate_id,target,email_alerts,created_at,updated_at) "
+        "VALUES(1,'https://www.example.test',1,2100000000,2100000000);"
+        "INSERT INTO monitor_recipients VALUES(1,'Tecnico','monitor@example.test');"
+        "INSERT INTO monitor_events(monitor_id,kind,message,expected_fingerprint,created_at) "
+        "VALUES(1,'unreachable','Servizio non raggiungibile','AA:BB',2100000000)");
+    int queued = -1, sent = -1;
+    REQUIRE(reminder_policy_check_escalation(&store, 1, now, &queued, error, sizeof error) && queued == 1);
+    REQUIRE(reminder_policy_check_escalation(&store, 1, now, &queued, error, sizeof error) && queued == 0);
+    REQUIRE(delivery_queue_monitor_event(&store, 1, now, &queued, error, sizeof error) && queued == 1);
+    REQUIRE(setenv("CERTIFICATI_SMTP_URL", "smtp://127.0.0.1:1", 1) == 0);
+    REQUIRE(setenv("CERTIFICATI_SMTP_FROM", "sender@example.test", 1) == 0);
+    /* Invalid headers fail before libcurl starts any SMTP connection. This
+     * checks claim eligibility and retry state for both new message kinds. */
+    sql(&store, "UPDATE outbox SET subject='Invalid'||char(10)||'Bcc: blocked'");
+    REQUIRE(!delivery_process(&store, now, &sent, error, sizeof error) && sent == 0);
+    REQUIRE(scalar(&store, "SELECT count(*) FROM outbox WHERE status='failed' AND attempts=1") == 2);
+    no_configuration();
+    sql(&store, "UPDATE reminder_policies SET enabled=0;UPDATE monitors SET email_alerts=0");
+    REQUIRE(delivery_process(&store, now+1, &sent, error, sizeof error) && sent == 0);
+    REQUIRE(scalar(&store, "SELECT count(*) FROM outbox") == 0);
+    store_close(&store);
 }
 
 static void test_attachment_preview_and_privacy(void)
@@ -569,6 +702,9 @@ int main(void)
     signal(SIGPIPE, SIG_IGN);
     generate_public_certificate();
     test_expiry_queue_and_obsolete_thresholds();
+    test_custom_reminders_and_escalation();
+    test_monitor_event_queue_recipients_and_recovery();
+    test_notification_claims_recheck_configuration();
     test_attachment_preview_and_privacy();
     test_header_injection_and_transaction_rollback();
     test_configuration_retries_and_leases();

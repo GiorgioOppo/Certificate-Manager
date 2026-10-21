@@ -243,14 +243,20 @@ class ApplicationTests(unittest.TestCase):
         state = self.state()
         new = next(c for c in state["certificates"] if c["id"] == renewal["certificate_id"])
         previous = next(c for c in state["certificates"] if c["id"] == old["id"])
-        self.assertEqual(previous["archived"], 1)
-        self.assertEqual(previous["superseded_by"], new["id"])
+        # Signing the renewal does not retire the still-installed certificate.
+        self.assertEqual(previous["archived"], 0)
+        self.assertIsNone(previous["superseded_by"])
         self.assertEqual(new["archived"], 0)
         self.assertEqual(new["contacts"], old["contacts"])
-        self.assertEqual(len(state["outbox"]), 2)
-        self.assertEqual(state["delivery"]["pending"], 2)
-        self.assertTrue(all(item["kind"] == "certificate" and item["status"] == "pending" for item in state["outbox"]))
-        for item in state["outbox"]:
+        self.assertEqual(len(state["outbox"]), 4)
+        self.assertEqual(state["delivery"]["pending"], 4)
+        certificate_messages = [item for item in state["outbox"] if item["kind"] == "certificate"]
+        previous_reminders = [item for item in state["outbox"] if item["kind"] == "expiry"]
+        self.assertEqual(len(certificate_messages), 2)
+        self.assertEqual(len(previous_reminders), 2)
+        self.assertTrue(all(item["certificate_id"] == old["id"] for item in previous_reminders))
+        self.assertTrue(all(item["status"] == "pending" for item in state["outbox"]))
+        for item in certificate_messages:
             self.assertNotIn("attachment_pem", item)
             status, headers, content = self.http("GET", f"/api/outbox/{item['id']}/message")
             self.assertEqual(status, 200, content)
@@ -277,11 +283,11 @@ class ApplicationTests(unittest.TestCase):
         # Changing recipients removes queued messages for people no longer assigned.
         status, _, body = self.save_contacts(new["id"], contacts[:3])
         self.assertEqual(status, 200, body)
-        self.assertEqual(len(self.state()["outbox"]), 1)
+        self.assertEqual(len(self.state()["outbox"]), 3)
         self.stop_server()
         self.start_server()
         self.assertEqual(len(next(c for c in self.state()["certificates"] if c["id"] == new["id"])["contacts"]), 3)
-        self.assertEqual(self.state()["delivery"]["pending"], 1)
+        self.assertEqual(self.state()["delivery"]["pending"], 3)
 
     def test_missing_chain_and_legacy_database_upgrade(self):
         self.cli("import", self.leaf_old)
@@ -309,7 +315,7 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(legacy["chain_status"], "legacy")
         self.assertFalse(legacy["pem_available"])
         self.assertEqual(len(state["notifications"]), 1)
-        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 4)
+        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 5)
         status, _, body = self.upload(self.leaf_old.read_bytes())
         self.assertEqual(status, 200, body)
         cert = self.state()["certificates"][0]
@@ -335,13 +341,41 @@ class ApplicationTests(unittest.TestCase):
         self.assertTrue(all(previous[table] for table in tables))
         # Remove later additions to recreate a populated, genuine v2 schema.
         with sqlite3.connect(self.db) as connection:
+            for table in ("renewal_endpoints", "renewal_jobs", "reminder_policies", "monitor_recipients",
+                          "certificate_groups", "directory_assignments", "directory_memberships",
+                          "directory_groups", "directory_people"):
+                connection.execute(f"DROP TABLE {table}")
+            # Rebuild the original tables rather than using DROP COLUMN, which
+            # would require SQLite 3.35 even though the application supports 3.24.
+            connection.execute("ALTER TABLE outbox RENAME TO outbox_v5_fixture")
+            connection.execute("CREATE TABLE outbox (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                               "certificate_id INTEGER NOT NULL REFERENCES certificates(id) ON DELETE CASCADE,"
+                               "kind TEXT NOT NULL CHECK(kind IN('expiry','certificate')),"
+                               "recipient_name TEXT NOT NULL,recipient_email TEXT NOT NULL,"
+                               "threshold INTEGER NOT NULL DEFAULT -1,subject TEXT NOT NULL,body TEXT NOT NULL,"
+                               "attachment_pem TEXT NOT NULL DEFAULT '',"
+                               "status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN('pending','sending','sent','failed')),"
+                               "attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',"
+                               "created_at INTEGER NOT NULL,sent_at INTEGER,next_attempt INTEGER NOT NULL DEFAULT 0,"
+                               "UNIQUE(certificate_id,kind,recipient_email,threshold))")
+            columns = [key for key in previous["outbox"][0] if key != "event_id"]
+            column_list = ",".join(columns)
+            connection.execute(f"INSERT INTO outbox({column_list}) SELECT {column_list} FROM outbox_v5_fixture")
+            connection.execute("DROP TABLE outbox_v5_fixture")
+            connection.execute("ALTER TABLE notifications RENAME TO notifications_v5_fixture")
+            connection.execute("CREATE TABLE notifications (certificate_id INTEGER NOT NULL "
+                               "REFERENCES certificates(id) ON DELETE CASCADE,"
+                               "threshold INTEGER NOT NULL CHECK(threshold IN(45,30,15,2,0)),"
+                               "sent_at INTEGER NOT NULL,PRIMARY KEY(certificate_id,threshold))")
+            connection.execute("INSERT INTO notifications SELECT * FROM notifications_v5_fixture")
+            connection.execute("DROP TABLE notifications_v5_fixture")
             connection.execute("DROP TABLE smtp_settings")
             connection.execute("DROP TABLE monitor_events")
             connection.execute("DROP TABLE monitors")
             connection.execute("PRAGMA user_version=2")
         self.start_server()
         state = self.state()
-        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 4)
+        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 5)
         self.assertEqual(state["monitors"], [])
         self.assertEqual(state["monitor_events"], [])
         for table in tables:

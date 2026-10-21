@@ -2,79 +2,94 @@
 
 [Panoramica del progetto](../README.md) · [Guida italiana](README.it.md) · [English version](WORKFLOW.md)
 
-Certificate Manager segue il certificato dall'acquisizione al rinnovo e controlla che i servizi monitorati espongano quello previsto nel registro. La CA fornisce il rinnovo firmato; il programma lo registra e ne distribuisce il materiale pubblico; i referenti tecnici lo installano sul servizio.
+Certificate Manager segue i certificati pubblici dall’acquisizione al rinnovo, alla consegna e alla verifica dell’installazione. Per uno stesso CN possono restare validi più certificati: tra la firma del rinnovo e la sua installazione possono passare giorni. Ogni impronta SHA-256 identifica una voce distinta del registro.
 
-L’interfaccia web comprende anche la pagina **Workflow**, all’indirizzo `/workflow`, con i diagrammi dei componenti, del ciclo operativo e del rinnovo in tutte e sei le lingue. I diagrammi sono inclusi nell’eseguibile e funzionano senza caricare un servizio esterno.
+La pagina **Workflow** (`/workflow`) presenta diagrammi dei componenti, del ciclo operativo e del rinnovo nelle sei lingue dell’interfaccia. Le nove pagine comprendono anche **Rubrica** (`/rubrica`) per persone e gruppi condivisi. L’eseguibile continua a chiamarsi `certificati`; vedi [installazione e Docker Compose](README.it.md#installazione-e-avvio).
 
 ## Come dialogano i componenti
 
 ```mermaid
 flowchart TD
     User["Operatore nel browser"] <-->|HTTP locale e JSON| Backend["Backend C"]
-    Files["File pubblici PEM o DER"] -->|Caricamento| Backend
-    Backend <-->|Lettura e scrittura| DB[("Database SQLite")]
-    Backend -->|Lettura X.509| X509["OpenSSL"]
-    Backend <-->|Controlli ed esiti| Monitor["Processo di monitoraggio TLS"]
+    Files["File pubblici PEM o DER"] -->|Anteprima e conferma| Backend
+    CSV["Inventario URL da CSV"] -->|Validazione e verifica URL| Backend
+    Backend <-->|Lettura e scrittura| DB[("Registro e coda SQLite")]
+    Backend -->|Lettura certificati e catene| X509["OpenSSL"]
+    Backend <-->|Pianificazione ed esiti| Monitor["Processo di monitoraggio TLS"]
     Monitor <-->|DNS, TCP, TLS| Services["Servizi HTTPS"]
-    Backend -->|Messaggi in coda| Mail["Invio email con libcurl"]
-    Mail -->|TLS| SMTP["Server SMTP configurato"]
+    Backend --> Rules["Regole scadenze ed escalation"]
+    Rules --> DB
+    Monitor -->|Email nuovi eventi se abilitate| DB
+    DB --> Mail["Invio email con libcurl"]
+    Mail -->|TLS verificato| SMTP["Server SMTP configurato"]
     SMTP --> Contacts["Referenti e referenti tecnici"]
 ```
 
-Il browser offre le otto pagine e chiama il backend su `127.0.0.1`. Il backend gestisce validazione, operazioni sui certificati, controlli pianificati e salvataggio dei dati. Gli aggiornamenti della pagina leggono lo stato salvato; chiudere il browser non ferma i controlli del backend. Le acquisizioni di rete dei monitor avvengono in un processo separato, così un servizio TLS lento non occupa il gestore delle richieste web.
+Il browser invia richieste e aggiorna lo stato salvato ogni 30 secondi. Il backend gestisce validazione, pianificazione e persistenza in SQLite. Le operazioni di rete dei monitor avvengono in un processo separato, così un servizio TLS lento non occupa il gestore delle richieste web. Chiudere il browser lascia attivi i controlli del backend; un caricamento CSV richiede invece che la scheda resti aperta.
 
 | Parte | Responsabilità | Sorgente |
 | --- | --- | --- |
-| Interfaccia web | Moduli, filtri del registro, risultati e scelta della lingua; aggiorna lo stato ogni 30 secondi. | [`web/app.js`](../web/app.js), [`web/i18n.js`](../web/i18n.js) |
-| Server HTTP | Pubblica pagine e API; controlla Host, Origin e token CSRF dove richiesto. | [`src/server.c`](../src/server.c) |
-| Gestione certificati | Importazione, scadenze, modifica dei referenti e rinnovo. OpenSSL estrae i dati X.509 e ricostruisce la catena disponibile. | [`src/app.c`](../src/app.c), [`src/certificate.c`](../src/certificate.c), [`src/chain.c`](../src/chain.c) |
-| Registro | Conserva certificati pubblici, metadati, assegnazioni, promemoria, eventi dei monitor e stato della coda. | [`src/store.c`](../src/store.c) |
-| Verifiche e monitoraggio | Recupera i certificati esposti, valuta gli esiti TLS e confronta le impronte con il registro. | [`src/remote.c`](../src/remote.c), [`src/remote_service.c`](../src/remote_service.c), [`src/monitor.c`](../src/monitor.c) |
-| Invio email | Prepara i messaggi per destinatario, gestisce i tentativi e usa la configurazione SMTP salvata. | [`src/delivery.c`](../src/delivery.c), [`src/smtp_settings.c`](../src/smtp_settings.c) |
+| Interfaccia web | Nove pagine, filtri, caricamento guidato da file e CSV, rubrica e avanzamento della distribuzione. | [`web/app.js`](../web/app.js), [`web/i18n.js`](../web/i18n.js) |
+| Server HTTP | Pagine e API con controlli Host, Origin e token CSRF. | [`src/server.c`](../src/server.c) |
+| Certificati e catene | Lettura X.509, importazione del materiale pubblico e ricostruzione delle CA disponibili. | [`src/app.c`](../src/app.c), [`src/certificate.c`](../src/certificate.c), [`src/chain.c`](../src/chain.c) |
+| Ciclo del rinnovo | Collegamenti fra certificati sovrapposti, pianificazione, prove per endpoint e condizioni di chiusura. | [`src/lifecycle.c`](../src/lifecycle.c) |
+| Rubrica e regole | Persone, gruppi, assegnazioni riutilizzabili, promemoria e anteprime senza modificare il registro. | [`src/workspace.c`](../src/workspace.c) |
+| Registro | Schema v5: certificati pubblici, piani, referenti, promemoria, eventi dei monitor, prove di installazione e coda. | [`src/store.c`](../src/store.c) |
+| Verifiche degli endpoint | Recupero dei certificati e controlli di raggiungibilità, fiducia, nome, date e impronte approvate. | [`src/remote.c`](../src/remote.c), [`src/remote_service.c`](../src/remote_service.c), [`src/monitor.c`](../src/monitor.c) |
+| Email | Messaggi per destinatario, deduplicazione degli eventi, tentativi e configurazione SMTP. | [`src/delivery.c`](../src/delivery.c), [`src/smtp_settings.c`](../src/smtp_settings.c) |
 
-## 1. Acquisire e registrare il certificato
+## 1. Esaminare, acquisire e registrare i certificati
 
-Sono disponibili due ingressi:
+**File di certificati.** Seleziona file PEM/DER o bundle PEM in **Importa certificati**. Prima di salvare, consulta CN, SAN, emittente, date di validità, impronta, Root CA e intermedie disponibili, duplicati e possibili predecessori. Gli avvisi sulla catena indicano l’emittente mancante e rimandano all’importazione per aggiungere i file CA disponibili. Non vengono recuperate CA automaticamente e caricare una Root CA non la rende fidata per le verifiche di rete.
 
-- **Importa certificati:** carica certificati pubblici PEM/DER, anche in un bundle PEM con certificato finale e CA. Il backend estrae CN, SAN, emittente, date di validità, numero di serie e impronta SHA-256, quindi salva l'importazione in una transazione. L'impronta identifica i duplicati, preservando referenti e storico esistenti.
-- **Verifica endpoint:** inserisci un URL HTTPS o un hostname risolvibile, eventualmente con porta. Un CN wildcard richiede un nome concreto. Il backend risolve il DNS, apre TCP e negozia TLS con SNI dove applicabile. Recupera la catena pubblica presentata e riporta separatamente fiducia, corrispondenza del nome e validità. Non richiede una pagina HTTP.
+L’anteprima usa un database temporaneo e non cambia il registro. Conferma l’importazione ordinaria oppure un collegamento di rinnovo proposto. Il candidato deve avere le stesse identità DNS/IP e una scadenza precedente; il CN viene usato quando mancano identità DNS/IP nei SAN. La sola presenza dello stesso CN non unisce automaticamente due voci. I duplicati di impronta conservano referenti e storico esistenti.
 
-Il controllo online produce prima un risultato temporaneo da consultare o scaricare; l'aggiunta al registro richiede un'azione esplicita. Il risultato resta in memoria fino a 10 minuti e vengono conservate al massimo otto acquisizioni. Download e importazione usano la stessa acquisizione.
+**Endpoint online.** Inserisci un URL HTTPS o un hostname risolvibile, eventualmente con porta. Per un CN wildcard serve un nome concreto. Il backend risolve DNS, apre TCP, negozia TLS con SNI dove applicabile e recupera la catena pubblica. Riporta separatamente fiducia, nome e validità; non richiede una pagina HTTP. Consulta o scarica il risultato, poi scegli esplicitamente di importarlo. Le acquisizioni temporanee durano fino a 10 minuti e ne restano disponibili al massimo otto. L’importazione online predispone un monitor a 15 minuti quando ammesso; quella da file non crea monitor.
 
-L'importazione dal risultato online predispone un monitor a 15 minuti per quell'endpoint, quando ammesso e non già configurato. L'importazione da file non crea monitor: aggiungi manualmente gli indirizzi dei servizi. I nomi delle CA dipendono dai certificati disponibili per ricostruire la catena; importare una Root CA non la rende fidata per le verifiche di rete.
+**Inventario CSV.** Carica un file CSV fino a 1 MiB oppure incolla il testo, con al massimo 100 righe di dati. `url` è obbligatoria; le colonne facoltative sono `business_name`, `business_email`, `technical_name` e `technical_email`:
 
-## 2. Assegnare i referenti e cercare i certificati
+```csv
+url,business_name,business_email,technical_name,technical_email
+https://servizio.example.test,Responsabile,referente@example.test,Operazioni,tecnico@example.test
+```
 
-Nel dettaglio del certificato salva una o più persone per ogni ruolo necessario:
+Separa più nomi e indirizzi nella stessa cella con punto e virgola, mantenendo lo stesso ordine. Valida, verifica gli URL, consulta gli esiti e avvia l’importazione. La scheda elabora le righe una alla volta, ripete ogni acquisizione prima di importare e blocca cambiamenti inattesi dell’impronta. Il certificato può restare consultabile per diagnosi anche se la verifica TLS è fallita; l’esito continua a segnalare il problema. L’importazione unisce i referenti per ruolo ed email. Ogni riga ha il proprio esito: un errore successivo non annulla le importazioni già riuscite. Correggi il problema e riprova; lascia aperta la scheda oppure interrompi il ciclo con l’apposito comando.
 
-| Ruolo | Riceve | Passo successivo |
+## 2. Assegnare le persone e cercare i certificati
+
+| Ruolo | Riceve | Responsabilità |
 | --- | --- | --- |
-| Referente | Email di promemoria alle soglie di scadenza raggiunte. | Coordinare il rinnovo con CA e gruppo tecnico. |
-| Referente tecnico | Nuovo certificato pubblico firmato e catena disponibile in allegato PEM. | Installare il rinnovo sul servizio e verificarne l'esito. |
+| Referente | Promemoria email alle soglie configurate. | Coordinare il rinnovo con CA e tecnici. |
+| Referente tecnico | Nuovo certificato pubblico firmato e catena disponibile in allegato PEM. | Installare il rinnovo esternamente e richiedere la verifica. |
+| Destinatario escalation | Email dopo il ritardo configurato dal primo promemoria registrato. | Sollecitare il completamento mentre il certificato resta attivo. |
+| Destinatario avvisi monitor | Email dei nuovi eventi di anomalia e ripristino, se abilitate per il monitor. | Esaminare il servizio e l’esito del certificato. |
 
-Una persona può avere entrambi i ruoli. Per recapitare le email serve un trasporto SMTP configurato e abilitato; la sola registrazione dei referenti non invia messaggi.
+Una persona può avere entrambi i ruoli sul certificato. **Rubrica** centralizza persone e gruppi: assegnali a più certificati e propaga le modifiche a indirizzi email e membri attraverso le assegnazioni. Le origini dei gruppi vengono conservate nei rinnovi. La rimozione di un destinatario cancella i relativi messaggi in attesa/non riusciti, conservando lo storico degli invii conclusi. Per recapitare la coda serve un trasporto SMTP abilitato.
 
-Il registro combina ricerca testuale, stato, referente, referente tecnico, Root CA, CA intermedia e scadenza entro una soglia con logica **AND**: ogni risultato deve soddisfare tutti i filtri scelti. Le soglie 45/30/15/2 giorni includono soltanto certificati già validi che scadono entro la durata selezionata. Le date corrispondono a `notBefore` e `notAfter` X.509; la validità nel tempo da sola non dimostra la fiducia.
+I filtri del registro combinano testo, validità temporale, referente, referente tecnico, Root CA, CA intermedia e scadenza entro una soglia con logica **AND**. Le soglie di ricerca 45/30/15/2 giorni includono soltanto certificati già validi che scadono entro la durata scelta e restano indipendenti dalle soglie personalizzate dei promemoria. `notBefore` X.509 indica l’inizio della validità, non necessariamente la firma; la sola validità nel tempo non dimostra fiducia né installazione.
 
-## 3. Controllare scadenze e servizi
+## 3. Pianificare le date ed eseguire i controlli periodici
 
-Sono due flussi distinti eseguiti dal backend:
+La pratica registra data della richiesta, rinnovo previsto, installazione prevista, responsabile e note. Sono date operative: non sostituiscono mai `notBefore` e `notAfter` del certificato. Aiutano a organizzare il lavoro; modificarle non richiede l’emissione alla CA e non distribuisce un certificato.
 
-| Flusso | Quando parte | Risultato |
+| Flusso | Frequenza | Risultato |
 | --- | --- | --- |
-| Promemoria di scadenza | All'avvio del server e ogni 60 secondi in `serve`. | Promemoria salvati e messaggi in coda per i referenti a 45, 30, 15, 2 giorni e alla scadenza. |
-| Monitoraggio degli endpoint | Alla scadenza pianificata di ciascun monitor attivo; predefinita 15 minuti, configurabile da 1 a 1440 minuti. | Stato, impronta osservata ed eventi salvati per servizi irraggiungibili, errori TLS, certificati cambiati, problemi di verifica e ripristino. |
-| Elaborazione email | All'avvio del server e ogni 60 secondi, oppure con l'azione di elaborazione della coda. | Tentativi sui messaggi idonei soltanto con SMTP configurato e invio abilitato. |
+| Regole di scadenza | All’avvio e ogni 60 secondi in `serve`. | Promemoria alle soglie raggiunte e messaggi in coda per i referenti. |
+| Escalation | Nei controlli di scadenza, dopo il ritardo dal primo promemoria registrato. | Una escalation per certificato attivo e destinatario. |
+| Monitor degli endpoint | Quando ciascun monitor attivo è dovuto; predefinita 15 minuti, configurabile da 1 a 1440 minuti. | Ultimo esito di rete/TLS/impronta, eventi di anomalia e ripristino deduplicati, email facoltative. |
+| Elaborazione email | All’avvio e ogni 60 secondi, oppure con l’azione sulla coda. | Tentativi sui messaggi idonei quando SMTP è configurato e abilitato. |
 
-Le soglie usano durate esatte di 24 ore. Se il primo controllo avviene a 10 giorni dalla scadenza, registra il promemoria dei 15 giorni e salta quelli superati dei 45 e 30 giorni. Lo storico persistente evita di ripetere le notifiche delle soglie; i promemoria in attesa diventati superati vengono rimossi a favore della soglia corrente.
+Le soglie predefinite sono 45, 30, 15, 2 e 0 giorni. Per certificato puoi scegliere soglie distinte da **0 a 3650 giorni**, includendo `0`, oppure sospendere i promemoria. Le durate sono esatte, di 24 ore: con le impostazioni predefinite, un primo controllo a 10 giorni dalla scadenza registra i 15 giorni e salta i superati 45/30. Lo storico evita ripetizioni dopo il riavvio; i vecchi messaggi in attesa lasciano posto alla soglia più urgente.
 
-Il monitor confronta l'**impronta SHA-256** del certificato finale esposto con quella del certificato associato nel registro. Gli errori identici ripetuti non generano un nuovo evento a ogni controllo; un'altra impronta osservata o un ripristino possono generarlo. Segnare un evento come letto non modifica il monitor e non accetta un nuovo certificato.
+L’escalation facoltativa usa **da 0 a 365 giorni dal primo promemoria registrato**, non dal caricamento o da una data pianificata. La firma di un rinnovo non interrompe promemoria ed escalation del precedente finché resta attivo.
 
-**Gli eventi dei monitor compaiono nell'interfaccia e nelle notifiche desktop facoltative; non generano email.** Un certificato cambiato non viene importato né accettato come rinnovo automaticamente. Consultalo e scegli se registrarlo attraverso il flusso di rinnovo.
+I monitor distinguono irraggiungibilità, errore TLS, certificato cambiato e verifica fallita. Gli errori identici ripetuti sono deduplicati; il ripristino viene registrato dopo un’anomalia. L’opzione email per monitor prepara i nuovi eventi di anomalia e ripristino per i destinatari scelti. Inizialmente è disabilitata e attivarla non reinvia gli eventi storici. Segnare un evento come letto non modifica le attese né approva un certificato.
 
-Tutte le attività periodiche richiedono un processo in esecuzione. `serve` offre anche l'interfaccia web; `watch` esegue promemoria, invii e monitor configurati senza server HTTP. In `watch`, l'intervallo del comando regola promemoria e coda, mentre i monitor mantengono i propri intervalli salvati. `check` elabora promemoria e coda una volta. Le notifiche desktop richiedono inoltre la pagina aperta e il consenso del browser.
+Durante un rinnovo collegato vengono riconosciuti il precedente e i rinnovi validi esplicitamente approvati nelle fasi firmato, consegnato o installazione. **Fiducia, nome e validità TLS restano obbligatori.** Un’impronta estranea è comunque inattesa; il monitor non importa né approva automaticamente certificati diversi.
 
-## 4. Registrare il rinnovo e distribuirlo
+Ogni attività periodica richiede un processo attivo. `serve` offre l’interfaccia; `watch` esegue promemoria, invii e monitor senza HTTP. Il suo intervallo regola promemoria e invii, mentre i monitor mantengono il proprio. `check` elabora una volta promemoria e coda. Le notifiche desktop richiedono inoltre una pagina aperta e il consenso del browser.
+
+## 4. Preparare il rinnovo firmato e verificare l’installazione
 
 ```mermaid
 sequenceDiagram
@@ -83,44 +98,63 @@ sequenceDiagram
     participant DB as Registro SQLite
     participant SMTP as Server SMTP
     actor Tecnico
-    participant Servizio as Servizio HTTPS
-    participant Monitor as Monitor periodico
-    Operatore->>App: Carica rinnovo firmato
-    App->>App: Valida rinnovo
-    App->>DB: Collega rinnovo e trasferisce assegnazioni
+    participant Servizi as Endpoint HTTPS
+    participant Monitor as Monitor TLS
+    Operatore->>App: Carica o collega il rinnovo firmato
+    App->>DB: Collega la pratica, copia referenti e regola
+    Note over DB,Monitor: Il precedente resta attivo con i suoi monitor
     App->>DB: Prepara PEM pubblico in coda per i tecnici
-    alt SMTP configurato e invio abilitato
-        App->>SMTP: Invia messaggio tramite TLS
-        SMTP-->>Tecnico: Email con PEM pubblico
-    else Invio non disponibile o in pausa
-        App->>DB: Mantiene messaggio in coda
+    alt Invio SMTP abilitato
+        App->>SMTP: Invia con TLS verificato
+        SMTP-->>Tecnico: Certificato pubblico e catena
+    else SMTP non disponibile o in pausa
+        App->>DB: Mantiene i messaggi in coda
     end
-    Tecnico->>Servizio: Installa rinnovo con strumenti esterni
-    Monitor->>Servizio: Esegue prossimo controllo
-    Servizio-->>Monitor: Certificato esposto
-    Monitor->>DB: Salva esito del confronto
+    Tecnico->>Servizi: Installa esternamente, un endpoint alla volta
+    Operatore->>App: Richiede verifica installazione
+    App->>Monitor: Invalida il controllo precedente e ne richiede uno nuovo
+    Monitor->>Servizi: Connessione TLS
+    Servizi-->>Monitor: Certificato esposto
+    Monitor->>DB: Salva nuova impronta e prova TLS
+    Operatore->>App: Completa pratica
+    App->>DB: Richiede esito recente per ogni endpoint
+    App->>DB: Trasferisce monitor e archivia il precedente inutilizzato
 ```
 
-Prima ottieni dalla CA il certificato firmato. Nel **dettaglio del vecchio certificato** usa l'azione per caricare il rinnovo. Il file deve contenere un certificato finale, oltre alle eventuali CA. Deve essere già valido, scadere dopo il precedente e mantenere le sue identità DNS/IP; in assenza di identità DNS/IP nei SAN si usa il CN come confronto.
+Puoi aprire la pratica prima dell’emissione. Le fasi sono **Da richiedere → In attesa della CA → Firmato → Consegnato → In installazione → Verificato**, con l’esito separato **Ritirato** per il ritiro manuale. Cambiare una fase descrittiva non emette certificati, non invia email e non prova l’installazione.
 
-Il backend registra il rinnovo in modo atomico: collega e archivia la vecchia voce, trasferisce referenti e monitor alla nuova, rimuove i messaggi in attesa/non riusciti del vecchio certificato e prepara un messaggio con PEM per ogni referente tecnico. Il rinnovo riesce anche senza tecnici; aggiungili in seguito e usa l'azione di preparazione manuale. L'importazione ordinaria crea una voce senza stabilire il collegamento di rinnovo.
+Ottieni dalla CA il rinnovo firmato. Carica un certificato finale con le eventuali CA dall’azione di rinnovo del precedente, accetta un candidato nell’anteprima o collega una voce compatibile già presente. Il rinnovo deve essere già valido, avere scadenza successiva e mantenere le stesse identità DNS/IP; in assenza di SAN DNS/IP viene usato il CN. Voci CA e predecessori già archiviati sono respinti.
 
-Ora il monitor si aspetta l'impronta **nuova** e riparte dallo stato in attesa. Fino all'installazione da parte del tecnico, il servizio può esporre ancora il vecchio certificato e generare correttamente un avviso di differenza. Se dopo il rinnovo è stata osservata un'anomalia, il successivo controllo riuscito con impronta corrispondente registra il ripristino; se il primo controllo trova già il certificato previsto, salva un esito regolare senza evento di ripristino. Certificate Manager non emette, firma o installa certificati e il suo database non contiene chiavi private TLS.
+Il collegamento crea o riusa una pratica aperta senza rinnovo, copia referenti, origini dei gruppi ed eventuale regola promemoria e prepara gli allegati PEM per i tecnici. **Non archivia il precedente, non cancella i suoi promemoria e non sposta i monitor.** Riesce anche senza tecnici; puoi aggiungerli e preparare i messaggi in seguito. Emissione, firma e installazione effettiva rimangono esterne al programma.
+
+| Voce nel registro | Validità X.509 | Stato operativo nella transizione |
+| --- | --- | --- |
+| Precedente | Può essere ancora valido | In uso fino al ritiro. |
+| Nuovo firmato | Valido | Pronto prima dell’installazione. |
+| Nuovo osservato durante la distribuzione | Valido | In distribuzione mentre la pratica resta aperta. |
+| Precedente archiviato | Può essere ancora valido | Ritirato dopo chiusura o ritiro esplicito. |
+
+Più rinnovi approvati possono coesistere per lo stesso CN, ognuno con impronta e collegamento distinti. I servizi possono essere aggiornati in giorni diversi. Il monitor ordinario può riconoscere un rinnovo approvato senza dichiarare verificata la pratica.
+
+Dopo l’installazione richiedi la verifica per un endpoint o tutti. La richiesta invalida i controlli partiti prima; i servizi in pausa devono essere riattivati. **La chiusura richiede che ogni endpoint associato esponga l’impronta del rinnovo di quella pratica e superi le verifiche TLS dopo la richiesta. Sia la richiesta sia l’esito positivo devono risalire agli ultimi 15 minuti.** Un’osservazione automatica precedente, una prova vecchia o un errore TLS non bastano. Ripeti il controllo quando la prova non è più recente.
+
+La chiusura trasferisce atomicamente i monitor verificati al nuovo certificato. Archivia il precedente solo se non conserva altre associazioni, interrompe i suoi promemoria futuri e rimuove i suoi messaggi in attesa/non riusciti. Eventuali URL duplicati già associati al nuovo certificato devono essere risolti prima della chiusura.
+
+Con **zero endpoint** il programma non può dimostrare l’installazione. Il ritiro manuale richiede responsabile, nota esplicativa e nessun monitor ancora associato al precedente, inclusi quelli in pausa. L’esito è **Ritirato**, mai **Verificato**. Anche gli archivi migrati restano ritiri storici, senza inventare prove di distribuzione.
 
 ## 5. Controllare e inviare le email
 
-In **Coda email** configura host SMTP, porta, mittente, modalità di sicurezza ed eventuali credenziali. **Verifica connessione** controlla TLS e autenticazione con i dati del modulo senza salvare né inviare email. Il salvataggio con invio abilitato permette al ciclo della coda di recapitare i messaggi; lasciando l'invio disabilitato restano disponibili per revisione e download `.eml`.
+**Coda email** contiene promemoria di scadenza, escalation, distribuzione di certificati pubblici e avvisi dei monitor abilitati. Configura host, porta, mittente, sicurezza ed eventuali credenziali. **Verifica connessione** prova TLS e autenticazione del modulo senza salvare né inviare email. Abilita l’invio quando vuoi procedere; altrimenti consulta e scarica i messaggi `.eml`.
 
-I messaggi passano da **In attesa → Invio in corso → Inviata**, oppure a **Non riuscita** se il tentativo fallisce. Gli errori vengono ritentati con attese crescenti, fino a cinque tentativi automatici; il reinserimento manuale in coda azzera il conteggio. “Inviata” indica l'accettazione SMTP, non la conferma di consegna nella casella. Un'interruzione dopo l'accettazione SMTP può causare un duplicato.
+Gli stati sono **In attesa → Invio in corso → Inviata**, oppure **Non riuscita**. Gli errori vengono ritentati con attese crescenti, fino a cinque tentativi automatici; il reinserimento manuale azzera il conteggio. “Inviata” significa accettazione SMTP, non consegna nella casella. Un’interruzione dopo l’accettazione può causare duplicati.
 
-SMTP usa STARTTLS obbligatorio o TLS implicito con verifica del certificato e del nome del server. La password è cifrata in SQLite usando una chiave locale nel file `<archivio>.smtp.key`. Conserva e proteggi entrambi i file nei backup. I dettagli sono nella [configurazione SMTP](README.it.md#coda-email-e-configurazione-smtp) e nel [modello di sicurezza](../SECURITY.md).
+SMTP usa STARTTLS obbligatorio o TLS implicito con verifica del certificato e del nome. La password è cifrata con la chiave locale `<archivio>.smtp.key`: proteggi e conserva nei backup sia questa sia SQLite. Vedi [configurazione SMTP](README.it.md#coda-email-e-configurazione-smtp) e [sicurezza](../SECURITY.md). Il database non contiene chiavi private TLS.
 
-## Esempio operativo
+## Esempio: due servizi aggiornati in giorni diversi
 
-1. Verifica `https://servizio.example.test`, consulta il certificato pubblico, importalo esplicitamente e salva referenti e tecnici. L'importazione online predispone un monitor a 15 minuti.
-2. A 30 giorni dalla scadenza il controllo registra la soglia raggiunta e prepara i messaggi per i referenti. Restano in attesa finché SMTP è disabilitato.
-3. Ottieni il rinnovo firmato dalla CA e caricalo attraverso l'azione di rinnovo della vecchia voce. La nuova eredita referenti e monitor; i messaggi per i tecnici contengono certificato pubblico e catena disponibile.
-4. Abilita il trasporto SMTP configurato quando vuoi recapitare i messaggi. Il tecnico riceve il materiale e lo installa seguendo la procedura di distribuzione del servizio.
-5. Al controllo successivo il monitor confronta il certificato installato con la nuova voce del registro e salva l'esito. Se l'installazione non è avvenuta o il servizio espone un altro certificato, l'interfaccia segnala la differenza.
-
-`servizio.example.test` è un nome di esempio: per un controllo effettivo usa l'indirizzo risolvibile di un servizio reale.
+1. Importa il certificato, assegna responsabile e gruppo operativo e configura due monitor. Se serve, abilita gli avvisi email dei monitor.
+2. Alla soglia configurata viene preparato un promemoria. Apri una pratica con date operative ed eventuale destinatario di escalation.
+3. Ricevi e collega il rinnovo firmato. Entrambe le voci restano valide e visibili. Le email PEM per i tecnici entrano in coda; monitor e promemoria del precedente restano attivi.
+4. Lunedì installa il rinnovo sul primo servizio. Il monitor riconosce l’impronta approvata, mentre il secondo servizio usa ancora il precedente valido. La pratica resta aperta.
+5. Mercoledì installa sul secondo servizio, richiedi una nuova verifica di tutti gli endpoint e consulta entrambi gli esiti.
+6. Completa entro 15 minuti dai controlli richiesti e riusciti. I monitor passano al nuovo certificato, il precedente entra nello storico e i suoi promemoria cessano. SMTP può restare in pausa durante le prove: i messaggi sono consultabili senza inviarli.

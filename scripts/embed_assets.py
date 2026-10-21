@@ -40,6 +40,8 @@ PAGES = (
          "Consulta i promemoria ai referenti e le distribuzioni ai referenti tecnici."),
     Page("workflow", "/workflow", "Workflow", "Come funziona",
          "Scopri come dialogano interfaccia, registro, controlli e invii email."),
+    Page("directory", "/rubrica", "Rubrica referenti", "Persone e gruppi",
+         "Gestisci persone, gruppi e assegnazioni condivise ai certificati."),
 )
 
 LANGUAGES = ("it", "en", "fr", "es", "zh-CN", "ja")

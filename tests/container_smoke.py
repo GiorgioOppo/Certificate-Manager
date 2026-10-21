@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import sqlite3
 import subprocess
 import tarfile
 import tempfile
@@ -85,13 +86,16 @@ def main():
         require(any(mount["Type"] == "volume" and mount["Destination"] == "/data"
                     for mount in info["Mounts"]), "Persistent data volume missing")
         for route in ("/", "/certificati", "/servizi", "/importa", "/verifica",
-                      "/promemoria", "/email", "/workflow?lang=ja"):
+                      "/promemoria", "/email", "/workflow?lang=ja", "/rubrica?lang=zh-CN"):
             require(request("GET", route)[0] == 200, f"Web page unavailable: {route}")
         require(request("GET", "/api/state", headers={"Host": "untrusted.example.test"})[0] == 403,
                 "Host protection was weakened")
         require(request("POST", "/api/check", b"")[0] == 403, "CSRF protection was weakened")
         initial = state()
         require(initial["certificates"] == [], "Test project must start with a fresh registry")
+        for collection in ("people", "groups", "reminder_policies", "monitor_mail",
+                           "renewal_jobs", "renewal_endpoints"):
+            require(initial[collection] == [], f"Unexpected initial workflow data: {collection}")
         token = initial["csrf_token"]
         require(request("POST", "/api/check", b"", {
             "Origin": "http://untrusted.example.test", "X-CSRF-Token": token,
@@ -103,6 +107,15 @@ def main():
                      "-days", "120", "-subj", "/CN=container.example.test",
                      "-addext", "basicConstraints=critical,CA:FALSE",
                      "-keyout", str(Path(directory) / "test-only.key"), "-out", str(certificate)])
+            status, preview_body = request("POST", "/api/import/preview", certificate.read_bytes(), {
+                "Content-Type": "application/octet-stream", "X-Filename": "container-test.pem",
+                "X-CSRF-Token": token,
+            })
+            require(status == 200, "Import preview failed in read-only container")
+            preview = json.loads(preview_body)["certificates"]
+            require(len(preview) == 1 and preview[0]["common_name"] == "container.example.test",
+                    "Import preview omitted certificate metadata")
+            require(state()["certificates"] == [], "Preview must not modify the registry")
             status, _ = request("POST", "/api/certificates", certificate.read_bytes(), {
                 "Content-Type": "application/octet-stream", "X-Filename": "container-test.pem",
                 "X-CSRF-Token": token,
@@ -112,6 +125,22 @@ def main():
         form("PUT", f"/api/certificates/{certificate_id}/contacts", [
             ("role", "business"), ("name", "Container test"), ("email", "test@example.test"),
         ], token)
+        person = form("POST", "/api/people", dict(name="Container technician",
+                      email="technician@example.test"), token)
+        group = form("POST", "/api/groups", dict(name="Container operations", person_id=person["id"]), token)
+        form("POST", f"/api/certificates/{certificate_id}/assignments", {
+            "role": "technical", "group_id": group["id"],
+        }, token)
+        form("PUT", f"/api/certificates/{certificate_id}/reminder-policy", {
+            "thresholds": "180, 120, 0", "enabled": 1,
+            "escalation_email": "manager@example.test", "escalation_name": "Container manager",
+            "escalation_after_days": 0,
+        }, token)
+        plan = form("POST", "/api/renewal-jobs", {
+            "old_certificate_id": certificate_id, "status": "awaiting_ca",
+            "responsible": "Container technician", "notes": "Synthetic renewal\nAwaiting CA",
+            "requested_at": int(time.time()), "planned_renewal_at": int(time.time()) + 86400,
+        }, token)
         profile = dict(enabled=0, host="smtp.example.test", port=587, security="starttls",
                        from_email="sender@example.test", username="test-user",
                        password="generated-test-only-password", clear_password=0)
@@ -123,7 +152,8 @@ def main():
         # A closed container-local port exercises the forked monitor without an
         # external HTTPS peer or any outbound SMTP delivery.
         form("POST", "/api/monitors", dict(certificate_id=certificate_id,
-             target="https://127.0.0.1:1", interval_minutes=1, enabled=1), token)
+             target="https://127.0.0.1:1", interval_minutes=1, enabled=1, email_alerts=1,
+             email_recipients="test@example.test;technician@example.test\nTEST@example.test"), token)
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             current = state()
@@ -132,7 +162,13 @@ def main():
             time.sleep(0.2)
         else:
             raise AssertionError("Background monitor did not finish inside the container")
-        print("HTTP, security checks, upload, monitor and encrypted SMTP storage passed.", flush=True)
+        require({message["kind"] for message in current["outbox"]} == {"expiry", "escalation", "monitor"},
+                "Reminder, escalation or monitor email was not queued")
+        require(len([message for message in current["outbox"] if message["kind"] == "monitor"]) == 2,
+                "Monitor recipients were not deduplicated")
+        require(all(message["status"] == "pending" and message["attempts"] == 0
+                    for message in current["outbox"]), "Paused SMTP must not attempt delivery")
+        print("HTTP, security, preview/import, directory, renewal plan, reminders, monitor alerts and encrypted SMTP passed.", flush=True)
 
         command(compose + ["down", "--remove-orphans"])
         archive = command(compose + ["run", "-T", "--rm", "--no-deps", "--entrypoint", "/bin/sh",
@@ -142,6 +178,17 @@ def main():
             require("certificati.db" in names, "Volume backup omitted the database")
             require("certificati.db.smtp.key" in names, "Volume backup omitted the SMTP key")
             require(names["certificati.db.smtp.key"].mode == 0o600, "Backup lost key permissions")
+            with tempfile.TemporaryDirectory(prefix="certificate-container-backup-") as directory:
+                database_path = Path(directory) / "snapshot.db"
+                database_path.write_bytes(backup.extractfile(names["certificati.db"]).read())
+                connection = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
+                try:
+                    require(connection.execute("PRAGMA user_version").fetchone()[0] == 5,
+                            "Container did not initialize the current database schema")
+                    require(connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok",
+                            "Backed-up database is inconsistent")
+                finally:
+                    connection.close()
 
         start()
         restored = state()
@@ -149,6 +196,16 @@ def main():
         require(restored["certificates"][0]["contacts"][0]["email"] == "test@example.test",
                 "Recreation lost contacts")
         require(len(restored["monitors"]) == 1, "Recreation lost monitoring settings")
+        require(restored["monitors"][0]["email_alerts"], "Recreation lost monitor alert settings")
+        require(len(restored["monitor_mail"]) == 2, "Recreation lost monitor recipients")
+        require(any(person["email"] == "technician@example.test" for person in restored["people"]),
+                "Recreation lost the contact directory")
+        require(any(item["id"] == group["id"] and person["id"] in item["member_ids"] for item in restored["groups"]),
+                "Recreation lost group memberships")
+        require(restored["reminder_policies"][0]["thresholds"] == "180,120,0",
+                "Recreation lost reminder policy normalization")
+        require(any(job["id"] == plan["job_id"] and job["notes"] == "Synthetic renewal\nAwaiting CA"
+                    for job in restored["renewal_jobs"]), "Recreation lost renewal planning")
         require(restored["smtp"]["password_set"] and not restored["smtp"]["enabled"],
                 "Recreation lost or enabled SMTP settings")
         form("PUT", "/api/smtp/settings", {**profile, "password": ""}, restored["csrf_token"])
