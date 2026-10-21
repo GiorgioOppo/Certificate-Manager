@@ -1007,5 +1007,6 @@
   "flow.csv_column_technical_name": "技术联系人姓名（选填）",
   "flow.csv_column_technical_email": "技术联系人邮箱（选填）",
   "flow.csv_schema_example": "示例行",
-  "flow.csv_text_label": "CSV 内容"
+  "flow.csv_text_label": "CSV 内容",
+  "flow.csv_download_template": "下载 CSV 模板"
 }

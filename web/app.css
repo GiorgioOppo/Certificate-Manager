@@ -796,6 +796,9 @@ textarea:focus-visible { outline: 3px solid #79a5ff; outline-offset: 3px; }
 .inventory-panel > p { margin: 14px 0; color: var(--muted); font-size: 12px; line-height: 1.8; }
 .inventory-schema { min-width: 0; margin: 18px 0; padding: 16px; border: 1px solid #dce5f0; border-radius: 7px; background: #f8faff; }
 .inventory-schema h3 { margin: 0 0 8px; color: #254c7d; font-size: 14px; }
+.inventory-schema-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.inventory-schema-heading h3 { margin: 0; }
+.inventory-schema-heading .button { min-height: 36px; padding: 8px 11px; font-size: 11px; }
 .inventory-schema > p { margin: 0 0 14px; color: var(--muted); font-size: 12px; line-height: 1.8; }
 .inventory-schema-table { width: 100%; table-layout: fixed; border-collapse: collapse; text-align: left; }
 .inventory-schema-table caption { padding: 0 0 10px; color: #496079; font-size: 11px; text-align: left; }

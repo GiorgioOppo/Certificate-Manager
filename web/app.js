@@ -1916,6 +1916,22 @@
     }
   }
 
+  function downloadInventoryTemplate() {
+    const table = document.querySelector('.inventory-schema-table');
+    if (!table) return;
+    const headers = Array.from(table.querySelectorAll('thead th code'), cell => cell.textContent);
+    const example = Array.from(table.querySelectorAll('tbody tr:first-child .inventory-column-value > code'), cell => cell.textContent);
+    const csv = [headers, example].map(row => row.map(value => `"${value.replace(/"/g, '""')}"`).join(',')).join('\r\n') + '\r\n';
+    const url = URL.createObjectURL(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'certificate-manager-modello.csv';
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   // RFC 4180 quoting, CRLF, embedded newlines and optional UTF-8 BOM.
   function parseInventoryCSV(source) {
     const text = source.replace(/^\uFEFF/, '');
@@ -2351,6 +2367,7 @@
   on('cancel-import-preview', 'click', () => { if (!uploading) { importDrafts = []; byId('import-preview-dialog').close(); } });
   on('import-preview-dialog', 'cancel', event => { if (uploading) event.preventDefault(); else importDrafts = []; });
   on('inventory-preview', 'click', previewInventory);
+  on('inventory-download-template', 'click', downloadInventoryTemplate);
   on('inventory-text', 'input', () => { inventoryRows = []; renderInventory(); });
   on('preview-chain-files', 'change', event => previewFiles(event.target.files));
   on('add-preview-chain', 'click', () => byId('preview-chain-files').click());

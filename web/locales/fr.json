@@ -1007,5 +1007,6 @@
   "flow.csv_column_technical_name": "Noms des contacts techniques (facultatif)",
   "flow.csv_column_technical_email": "Adresses email des contacts techniques (facultatif)",
   "flow.csv_schema_example": "Exemple de ligne",
-  "flow.csv_text_label": "Contenu CSV"
+  "flow.csv_text_label": "Contenu CSV",
+  "flow.csv_download_template": "Télécharger le modèle CSV"
 }

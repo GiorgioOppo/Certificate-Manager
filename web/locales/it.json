@@ -1007,5 +1007,6 @@
   "flow.csv_column_technical_name": "Nomi dei referenti tecnici (facoltativo)",
   "flow.csv_column_technical_email": "Email dei referenti tecnici (facoltativo)",
   "flow.csv_schema_example": "Esempio di una riga",
-  "flow.csv_text_label": "Contenuto CSV"
+  "flow.csv_text_label": "Contenuto CSV",
+  "flow.csv_download_template": "Scarica modello CSV"
 }

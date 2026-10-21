@@ -1007,5 +1007,6 @@
   "flow.csv_column_technical_name": "技術担当者の名前（任意）",
   "flow.csv_column_technical_email": "技術担当者のメールアドレス（任意）",
   "flow.csv_schema_example": "行の記入例",
-  "flow.csv_text_label": "CSV の内容"
+  "flow.csv_text_label": "CSV の内容",
+  "flow.csv_download_template": "CSV テンプレートをダウンロード"
 }
