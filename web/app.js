@@ -1765,6 +1765,8 @@
   let inventoryRows = [];
   let inventoryRunning = false;
   let inventoryStopped = false;
+  let inventoryReadGeneration = 0;
+  let inventoryReading = false;
   let directoryEditingPerson = null;
   let directoryEditingGroup = null;
   const operationalLabels = () => ({ registered: flow('registered'), in_use: flow('in_use'), installed: flow('in_use'), ready: flow('ready'), staged: flow('ready'), pending_installation: flow('ready'), deploying: flow('deploying'), retired: flow('retired'), archived: flow('retired') });
@@ -1935,46 +1937,118 @@
   // RFC 4180 quoting, CRLF, embedded newlines and optional UTF-8 BOM.
   function parseInventoryCSV(source) {
     const text = source.replace(/^\uFEFF/, '');
-    const rows = []; let row = []; let value = ''; let quoted = false; let closed = false;
-    for (let index = 0; index <= text.length; index++) {
-      const character = index === text.length ? '\n' : text[index];
+    const records = [];
+    let cells = [], value = '', quoted = false, closed = false, syntax = false;
+    let line = 1, recordLine = 1, quoteLine = 1;
+    const quoteError = atLine => new Error(flow('csv_quote_line', [atLine]));
+    const finishRecord = () => {
+      cells.push(value);
+      // Ignore physical blank lines, but keep explicit empty CSV rows such as ",,,,".
+      if (syntax || cells.some(cell => cell.trim())) records.push({ line: recordLine, cells });
+      cells = []; value = ''; closed = false; syntax = false;
+    };
+    for (let index = 0; index < text.length; index++) {
+      const character = text[index];
       if (quoted) {
-        if (index === text.length) throw new Error(flow('csv_quote_error'));
         if (character === '"' && text[index + 1] === '"') { value += '"'; index++; }
         else if (character === '"') { quoted = false; closed = true; }
-        else value += character;
-      } else if (character === '"' && !value && !closed) quoted = true;
-      else if (character === ',' || character === '\n' || character === '\r') {
-        row.push(value); value = ''; closed = false;
-        if (character !== ',') {
-          if (row.some(item => item.trim())) rows.push(row);
-          row = [];
-          if (character === '\r' && text[index + 1] === '\n') index++;
+        else {
+          value += character;
+          if (character === '\r') {
+            if (text[index + 1] === '\n') { value += '\n'; index++; }
+            line++;
+          } else if (character === '\n') line++;
         }
-      } else if (closed || character === '"') throw new Error(flow('csv_quote_error'));
+      } else if (character === '"' && !value && !closed) {
+        quoted = true; syntax = true; quoteLine = line;
+      }
+      else if (character === ',' || character === '\n' || character === '\r') {
+        if (character === ',') { cells.push(value); value = ''; closed = false; syntax = true; }
+        else {
+          finishRecord();
+          if (character === '\r' && text[index + 1] === '\n') index++;
+          line++; recordLine = line;
+        }
+      } else if (closed || character === '"') throw quoteError(line);
       else value += character;
     }
-    if (rows.length < 2) throw new Error(flow('csv_empty'));
-    const header = rows.shift().map(value => value.trim().toLowerCase());
-    if (new Set(header).size !== header.length || !header.includes('url') || header.some(key => !['url', 'business_name', 'business_email', 'technical_name', 'technical_email'].includes(key))) throw new Error(flow('csv_header'));
-    if (rows.length > 100) throw new Error(flow('csv_limit'));
-    return rows.map((values, index) => {
-      const row = { line: index + 2, contacts: [], result: null, imported: false, error: '', target: '' };
-      if (values.length !== header.length) row.error = flow('csv_columns');
-      const data = Object.fromEntries(header.map((key, offset) => [key, (values[offset] || '').trim()]));
-      row.target = data.url;
+    if (quoted) throw quoteError(quoteLine);
+    if (cells.length || value || closed || syntax) finishRecord();
+    if (records.length < 2) throw new Error(flow('csv_empty'));
+    const columns = ['url', 'business_name', 'business_email', 'technical_name', 'technical_email'];
+    const header = records.shift().cells.map(cell => cell.trim().toLowerCase());
+    if (new Set(header).size !== header.length || !header.includes('url') || header.some(key => !columns.includes(key))) throw new Error(flow('csv_header'));
+    if (records.length > 100) throw new Error(flow('csv_limit'));
+    const byteLength = value => new TextEncoder().encode(value).length;
+    // Match store_email_valid, including single-label domains and ASCII-only local parts.
+    const validEmail = email => {
+      if (!email || email.length > 254) return false;
+      const parts = email.split('@');
+      if (parts.length !== 2 || !parts[0] || parts[0].length > 64 || !parts[1]) return false;
+      if (!/^[A-Za-z0-9._%+-]+$/.test(parts[0]) || parts[0].startsWith('.') || parts[0].endsWith('.') || parts[0].includes('..')) return false;
+      return parts[1].split('.').every(label => label.length > 0 && label.length <= 63 && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label));
+    };
+    const validTarget = target => {
+      if (!target || byteLength(target) > 4096 || /[\s\u0000-\u001f\u007f]/.test(target)) return false;
+      const hasScheme = /^https:\/\//i.test(target);
+      if ((!hasScheme && target.includes('://')) || /^http:/i.test(target)) return false;
+      const remainder = hasScheme ? target.slice(8) : target;
+      const authority = remainder.split(/[/?#]/, 1)[0];
+      if (!hasScheme && authority !== remainder) return false;
+      if (!authority || /[@*\\]/.test(authority)) return false;
+      let host = authority, port = '';
+      if (authority.startsWith('[')) {
+        const closing = authority.indexOf(']');
+        if (closing < 0 || (closing + 1 < authority.length && authority[closing + 1] !== ':')) return false;
+        host = authority.slice(0, closing + 1);
+        if (closing + 1 < authority.length) port = authority.slice(closing + 2);
+        try { if (!new URL(`https://${host}`).hostname.startsWith('[')) return false; } catch (_) { return false; }
+        if (closing + 1 < authority.length && !port) return false;
+      } else if ((authority.match(/:/g) || []).length > 1) {
+        // The backend also accepts a bare IPv6 address without a separate port.
+        try { return new URL(`https://[${authority}]`).hostname.startsWith('['); } catch (_) { return false; }
+      } else {
+        const colon = authority.indexOf(':');
+        if (colon >= 0) { host = authority.slice(0, colon); port = authority.slice(colon + 1); if (!port) return false; }
+        if (host.endsWith('.')) host = host.slice(0, -1);
+        if (!host || host.length > 253 || !host.split('.').every(label => label.length <= 63 && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label))) return false;
+      }
+      return !port || (/^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535);
+    };
+    return records.map(record => {
+      const values = Object.fromEntries(columns.map(column => [column, '']));
+      header.forEach((column, index) => { values[column] = record.cells[index] || ''; });
+      const row = { line: record.line, contacts: [], result: null, imported: false, error: '', target: values.url.trim(), values, extraValues: record.cells.slice(header.length), errors: [], invalidFields: [] };
+      const addError = (column, key, invalid = [column]) => {
+        const message = flow(key);
+        if (!row.errors.some(error => error.column === column && error.message === message)) row.errors.push({ column, message });
+        for (const field of invalid) if (!row.invalidFields.includes(field)) row.invalidFields.push(field);
+        if (!row.error) row.error = message;
+      };
+      if (record.cells.length !== header.length) addError('_row', 'csv_columns', columns);
       try {
-        const candidate = new URL(/^https:\/\//i.test(data.url) ? data.url : `https://${data.url}`);
-        if ((/^[a-z][a-z0-9+.-]*:\/\//i.test(data.url) && !/^https:\/\//i.test(data.url)) || !data.url || candidate.protocol !== 'https:' || candidate.username || candidate.password || candidate.hostname.includes('*') || /[\s\u0000-\u001f]/.test(data.url)) throw new Error();
-      } catch (_) { row.error = flow('csv_target_error'); }
+        if (!validTarget(row.target)) addError('url', 'csv_target_error');
+      } catch (_) { addError('url', 'csv_target_error'); }
       for (const role of ['business', 'technical']) {
-        const emails = (data[`${role}_email`] || '').split(';').map(value => value.trim()).filter(Boolean);
-        const names = (data[`${role}_name`] || '').split(';').map(value => value.trim());
+        const emailColumn = `${role}_email`, nameColumn = `${role}_name`;
+        const emails = values[emailColumn].trim() ? values[emailColumn].split(';').map(email => email.trim()) : [];
+        const names = values[nameColumn].trim() ? values[nameColumn].split(';').map(name => name.trim()) : [];
+        if (names.length && names.length !== emails.length) addError(nameColumn, 'csv_name_count', [nameColumn, emailColumn]);
+        for (const name of names) {
+          if (byteLength(name) > 120) addError(nameColumn, 'csv_name_length');
+          if (/[\u0000-\u001f\u007f]/.test(name)) addError(nameColumn, 'csv_name_control');
+        }
+        const seen = new Set();
         for (const [offset, email] of emails.entries()) {
-          if (!/^[^\s@;,]+@[^\s@;,]+\.[^\s@;,]+$/.test(email)) row.error = flow('csv_email_error');
+          if (!email) addError(emailColumn, 'csv_empty_email');
+          else if (!validEmail(email)) addError(emailColumn, 'csv_email_error');
+          const key = email.toLowerCase();
+          if (email && seen.has(key)) addError(emailColumn, 'csv_duplicate_email');
+          seen.add(key);
           row.contacts.push({ role, name: names[offset] || '', email });
         }
       }
+      if (row.contacts.length > 100) addError('_row', 'csv_contact_count', ['business_email', 'technical_email']);
       return row;
     });
   }
@@ -1982,31 +2056,96 @@
     const content = byId('inventory-results');
     if (!content) return;
     content.replaceChildren();
-    for (const row of inventoryRows) {
-      const card = element('article', `inventory-row${row.error ? ' is-error' : ''}`);
-      card.append(element('strong', '', `${row.line} · ${row.target}`));
-      if (row.error) card.append(element('p', '', row.error));
-      else if (row.imported) card.append(element('p', '', flow('csv_imported')));
-      else if (row.result) {
-        const cert = row.result.certificate || (row.result.certificates || [])[0];
-        card.append(element('p', '', `${cert ? name(cert) : ''} · ${cert ? date(cert.not_after) : '—'}`));
-        if (cert) { const metadata = element('dl', 'details-data'); addDetail(metadata, msg('m_2ab68816f88b'), cert.issuer, true); addDetail(metadata, msg('m_8693b331d694'), date(cert.not_before)); addDetail(metadata, msg('m_4cdd497e69c7'), cert.fingerprint, true, true); card.append(metadata); }
-        if (row.result.verification_error) card.append(element('p', 'import-chain-warning', row.result.verification_error));
-        if (row.result.verified === false) card.append(element('p', 'import-chain-warning', flow('csv_unverified')));
-      } else card.append(element('p', '', flow('csv_ready')));
-      if (row.contacts.length) card.append(element('p', 'workflow-help', row.contacts.map(contact => `${contact.role === 'technical' ? msg('m_a6da5b872c69') : msg('m_3ce1f3185cbc')}: ${contact.email}`).join(' · ')));
-      content.append(card);
+    const fields = ['url', 'business_name', 'business_email', 'technical_name', 'technical_email'];
+    const errorCount = inventoryRows.filter(row => row.error).length;
+    const hasValidationErrors = inventoryRows.some(row => (row.errors || []).length);
+    if (!inventoryRows.length) content.append(element('p', 'inventory-preview-empty', flow('csv_preview_empty')));
+    else {
+      const title = element('h3', '', flow('csv_loaded_title'));
+      title.id = 'inventory-loaded-title';
+      const summary = element('p', `inventory-validation-summary${errorCount ? ' is-error' : ''}`, flow('csv_rows_summary', [inventoryRows.length, inventoryRows.length - errorCount, errorCount]));
+      content.append(title, summary);
+      if (hasValidationErrors) content.append(element('p', 'inventory-validation-help', flow('csv_fix_rows')));
+      content.append(element('p', 'inventory-preview-scroll-help', flow('csv_table_scroll')));
+      const scroll = element('div', 'inventory-preview-scroll');
+      scroll.tabIndex = 0;
+      scroll.setAttribute('role', 'region');
+      scroll.setAttribute('aria-labelledby', title.id);
+      const table = element('table', 'inventory-preview-table');
+      const caption = element('caption', 'visually-hidden', flow('csv_loaded_title'));
+      const head = element('thead');
+      const headerRow = element('tr');
+      const labels = [flow('csv_row_number'), flow('csv_row_status'), ...fields, flow('csv_error_details')];
+      for (const label of labels) {
+        const cell = element('th', '', label);
+        cell.scope = 'col';
+        headerRow.append(cell);
+      }
+      head.append(headerRow);
+      const body = element('tbody');
+      const labelledCell = (label, className = '') => {
+        const cell = element('td', className);
+        const mobileLabel = element('span', 'inventory-preview-cell-label', label);
+        mobileLabel.setAttribute('aria-hidden', 'true');
+        cell.append(mobileLabel);
+        return cell;
+      };
+      for (const row of inventoryRows) {
+        const tr = element('tr', row.error ? 'is-error' : '');
+        const numberCell = labelledCell(labels[0], 'inventory-preview-line');
+        numberCell.append(element('strong', '', String(row.line)));
+        tr.append(numberCell);
+        for (const field of fields) {
+          const invalid = (row.invalidFields || []).includes(field) || (row.error && row.runtimeErrorField === field);
+          const cell = labelledCell(field, invalid ? 'inventory-preview-invalid' : '');
+          if (invalid) {
+            cell.setAttribute('aria-invalid', 'true');
+            cell.title = flow('csv_cell_invalid', [field]);
+          }
+          cell.append(element('span', 'inventory-preview-value', row.values && row.values[field] || '—'));
+          tr.append(cell);
+        }
+        const status = labelledCell(labels[1], 'inventory-preview-status');
+        const statusKey = row.error ? 'csv_row_invalid' : row.imported ? 'csv_row_imported' : row.result ? 'csv_row_checked' : 'csv_row_valid';
+        status.append(element('span', `inventory-row-state${row.error ? ' is-error' : ' is-valid'}`, flow(statusKey)));
+        if (row.result && !row.error) {
+          const cert = row.result.certificate || (row.result.certificates || [])[0];
+          if (cert) {
+            status.append(element('p', '', `${name(cert)} · ${date(cert.not_after)}`));
+            const details = element('details', 'inventory-certificate-details');
+            details.append(element('summary', '', msg('m_8b3b165e98d5')));
+            const metadata = element('dl', 'details-data');
+            addDetail(metadata, msg('m_2ab68816f88b'), cert.issuer, true);
+            addDetail(metadata, msg('m_8693b331d694'), date(cert.not_before));
+            addDetail(metadata, msg('m_4cdd497e69c7'), cert.fingerprint, true, true);
+            details.append(metadata); status.append(details);
+          }
+          if (row.result.verification_error) status.append(element('p', 'import-chain-warning', row.result.verification_error));
+          if (row.result.verified === false) status.append(element('p', 'import-chain-warning', flow('csv_unverified')));
+        }
+        const errors = labelledCell(labels[7], 'inventory-preview-errors');
+        const messages = (row.errors || []).map(issue => `${fields.includes(issue.column) ? issue.column + ': ' : ''}${issue.message}`);
+        if (row.error && !(row.errors || []).some(issue => issue.message === row.error)) messages.push(row.error);
+        if ((row.extraValues || []).length) messages.push(flow('csv_raw_extra', [row.extraValues.join(', ')]));
+        if (messages.length) {
+          const list = element('ul');
+          for (const message of messages) list.append(element('li', '', message));
+          errors.append(list);
+        } else errors.append(element('span', '', '—'));
+        tr.insertBefore(status, numberCell.nextSibling);
+        tr.append(errors); body.append(tr);
+      }
+      table.append(caption, head, body); scroll.append(table); content.append(scroll);
     }
-    const valid = inventoryRows.length && inventoryRows.every(row => !row.error);
-    byId('inventory-check').disabled = inventoryRunning || !valid;
-    byId('inventory-import').disabled = inventoryRunning || !inventoryRows.some(row => row.result && !row.error && !row.imported);
-    byId('inventory-preview').disabled = inventoryRunning;
+    byId('inventory-check').disabled = inventoryRunning || inventoryReading || !inventoryRows.length || hasValidationErrors;
+    byId('inventory-import').disabled = inventoryRunning || inventoryReading || !!errorCount || !inventoryRows.some(row => row.result && !row.error && !row.imported);
+    byId('inventory-preview').disabled = inventoryRunning || inventoryReading;
     byId('inventory-text').disabled = inventoryRunning;
     byId('inventory-file').disabled = inventoryRunning;
     byId('inventory-cancel').hidden = !inventoryRunning;
   }
   function previewInventory() {
-    if (inventoryRunning) return;
+    if (inventoryRunning || inventoryReading) return;
     try {
       inventoryRows = parseInventoryCSV(byId('inventory-text').value);
       byId('inventory-feedback').textContent = flow('csv_validated', [inventoryRows.length]);
@@ -2014,12 +2153,15 @@
     renderInventory();
   }
   async function runInventory(importing) {
-    if (inventoryRunning || uploading || !inventoryRows.length) return;
+    if (inventoryRunning || inventoryReading || uploading || !inventoryRows.length || inventoryRows.some(row => (row.errors || []).length) || (importing && inventoryRows.some(row => row.error))) return;
     inventoryRunning = true; inventoryStopped = false;
     renderInventory();
     for (const [index, row] of inventoryRows.entries()) {
       if (inventoryStopped) break;
-      if (row.error || row.imported || (importing && !row.result)) continue;
+      if (row.imported || (row.errors || []).length || (importing && (!row.result || row.error))) continue;
+      if (!importing) { row.error = ''; row.result = null; }
+      row.runtimeErrorField = '';
+      let failureField = 'url';
       byId('inventory-feedback').textContent = flow(importing ? 'csv_import_progress' : 'csv_progress', [index + 1, inventoryRows.length]);
       try {
         if (!importing) {
@@ -2031,6 +2173,7 @@
           row.result = await request('/api/remote/check', { method: 'POST', body: new URLSearchParams({ target: row.target }) }, true);
           if (!row.result.token) throw new Error(row.result.error || flow('csv_no_certificate'));
           if (checkedFingerprint && (!row.result.certificate || checkedFingerprint !== row.result.certificate.fingerprint)) throw new Error(flow('csv_certificate_changed'));
+          failureField = '';
           const body = new URLSearchParams({ token: row.result.token });
           const imported = await request('/api/remote/import', { method: 'POST', body });
           if (imported.monitoring_error) throw new Error(imported.monitoring_error);
@@ -2045,7 +2188,7 @@
           }
           row.imported = true;
         }
-      } catch (error) { row.error = error.message; }
+      } catch (error) { row.error = error.message; row.runtimeErrorField = failureField; }
       renderInventory();
     }
     inventoryRunning = false;
@@ -2368,21 +2511,53 @@
   on('import-preview-dialog', 'cancel', event => { if (uploading) event.preventDefault(); else importDrafts = []; });
   on('inventory-preview', 'click', previewInventory);
   on('inventory-download-template', 'click', downloadInventoryTemplate);
-  on('inventory-text', 'input', () => { inventoryRows = []; renderInventory(); });
+  on('inventory-text', 'input', () => {
+    if (inventoryRunning) return;
+    inventoryReadGeneration++;
+    inventoryReading = false;
+    byId('inventory-file').value = '';
+    inventoryRows = [];
+    byId('inventory-feedback').textContent = '';
+    renderInventory();
+  });
   on('preview-chain-files', 'change', event => previewFiles(event.target.files));
   on('add-preview-chain', 'click', () => byId('preview-chain-files').click());
   on('inventory-check', 'click', () => runInventory(false));
   on('inventory-import', 'click', () => runInventory(true));
   on('inventory-cancel', 'click', () => { inventoryStopped = true; });
   on('inventory-file', 'change', async event => {
-    const file = event.target.files[0]; if (!file) return;
-    if (file.size > 1024 * 1024) { byId('inventory-feedback').textContent = flow('csv_size'); return; }
-    byId('inventory-text').value = await file.text(); previewInventory();
+    if (inventoryRunning) return;
+    const generation = ++inventoryReadGeneration;
+    const file = event.target.files[0];
+    inventoryRows = [];
+    byId('inventory-text').value = '';
+    byId('inventory-feedback').textContent = '';
+    inventoryReading = !!file && file.size <= 1024 * 1024;
+    if (file && !inventoryReading) {
+      byId('inventory-file').value = '';
+      byId('inventory-feedback').textContent = flow('csv_size');
+    }
+    renderInventory();
+    if (!inventoryReading) return;
+    try {
+      const text = await file.text();
+      if (generation !== inventoryReadGeneration) return;
+      inventoryReading = false;
+      byId('inventory-text').value = text;
+      previewInventory();
+    } catch (_) {
+      if (generation !== inventoryReadGeneration) return;
+      inventoryReading = false;
+      byId('inventory-file').value = '';
+      byId('inventory-feedback').textContent = flow('csv_read_error');
+      renderInventory();
+    }
   });
   window.addEventListener('beforeunload', event => {
     if (workflowDirty || importDrafts.length || inventoryRunning) { event.preventDefault(); event.returnValue = ''; }
   });
   initializeWorkflow();
+  if (currentPage === 'import') renderInventory();
   restoreRegistryFilters();
   restoreDesktopPreference();
   let legacyId = '';

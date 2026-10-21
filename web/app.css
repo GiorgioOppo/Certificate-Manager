@@ -812,12 +812,39 @@ textarea:focus-visible { outline: 3px solid #79a5ff; outline-offset: 3px; }
 .inventory-text-label { display: block; margin: 0 0 8px; color: #496079; font-size: 12px; font-weight: 600; }
 .inventory-panel textarea { font-family: ui-monospace,SFMono-Regular,monospace; font-size: 12px; line-height: 1.7; }
 .inventory-panel input[type="file"] { max-width: 100%; color: #64748b; font-size: 12px; }
-.inventory-results { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
-.inventory-row { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 6px; background: #f8faff; }
-.inventory-row strong { font-size: 12px; overflow-wrap: anywhere; }
-.inventory-row p { margin: 8px 0 0; color: #62728b; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
-.inventory-row.is-error { border-color: #ebc9cd; background: #fff4f4; }
-.inventory-row.is-error p { color: #9f3446; }
+.inventory-results { min-width: 0; margin-top: 18px; }
+.inventory-results > h3 { margin: 0 0 8px; color: #254c7d; font-size: 14px; }
+.inventory-preview-empty, .inventory-validation-summary, .inventory-validation-help { margin: 8px 0 12px; color: var(--muted); font-size: 12px; line-height: 1.8; }
+.inventory-validation-summary.is-error, .inventory-validation-help { color: #9f3446; }
+.inventory-preview-scroll-help { margin: 8px 0; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.inventory-preview-scroll { max-height: 580px; overflow: auto; overscroll-behavior: contain; border: 1px solid #dce5f0; border-radius: 6px; }
+.inventory-preview-scroll:focus-visible { outline: 3px solid #79a5ff; outline-offset: 3px; }
+.inventory-preview-table { width: 100%; min-width: 1160px; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
+.inventory-preview-table th, .inventory-preview-table td { padding: 10px; vertical-align: top; white-space: normal; overflow-wrap: anywhere; font-size: 11px; line-height: 1.8; }
+.inventory-preview-table th { position: sticky; top: 0; z-index: 1; color: #254c7d; background: #edf2fa; letter-spacing: 0; text-transform: none; }
+.inventory-preview-table th:first-child { width: 65px; }
+.inventory-preview-table th:nth-child(2) { width: 150px; }
+.inventory-preview-table th:last-child { width: 220px; }
+.inventory-preview-table td { color: #344c6d; background: #fff; border-bottom: 1px solid #dce5f0; }
+.inventory-preview-table th:first-child, .inventory-preview-table td:first-child { position: sticky; left: 0; z-index: 2; }
+.inventory-preview-table th:nth-child(2), .inventory-preview-table td:nth-child(2) { position: sticky; left: 65px; z-index: 2; border-right: 1px solid #dce5f0; }
+.inventory-preview-table th:first-child, .inventory-preview-table th:nth-child(2) { z-index: 3; }
+.inventory-preview-table tr.is-error td { background: #fff7f8; }
+.inventory-preview-table tr.is-error .inventory-preview-invalid { color: #9f3446; background: #ffedf0; box-shadow: inset 3px 0 #bd4258; }
+.inventory-preview-line { color: #496079; font-variant-numeric: tabular-nums; }
+.inventory-preview-value { white-space: pre-wrap; }
+.inventory-preview-cell-label { display: none; }
+.inventory-preview-errors ul { margin: 0; padding-left: 16px; color: #9f3446; }
+.inventory-preview-errors li + li { margin-top: 5px; }
+.inventory-row-state { display: inline-block; padding: 3px 6px; border-radius: 4px; font-weight: 600; }
+.inventory-row-state.is-error { color: #9f3446; background: #ffe1e7; }
+.inventory-row-state.is-valid { color: #1a785b; background: #eaf7f1; }
+.inventory-preview-status p { margin: 8px 0 0; }
+.inventory-certificate-details { margin-top: 8px; }
+.inventory-certificate-details summary { font-size: 11px; }
+.inventory-certificate-details .details-data { display: block; margin: 10px 0 0; }
+.inventory-certificate-details .details-data dt { margin-top: 8px; }
+.inventory-certificate-details .details-data dd { margin: 3px 0 0; }
 @media (max-width: 720px) {
  .inventory-schema { padding: 13px; }
  .inventory-schema-table, .inventory-schema-table tbody, .inventory-schema-table tr { display: block; }
