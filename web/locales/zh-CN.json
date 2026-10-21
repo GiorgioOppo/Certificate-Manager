@@ -998,5 +998,14 @@
   "m_0be8d57d9f2d": "监控邮件配置无效。",
   "m_803a7da0854e": "HTTPS 证书续期升级通知：{0}",
   "m_6686b60e4ea8": "HTTPS 监控 {0}：服务已恢复",
-  "m_689cbff116de": "HTTPS 监控 {0}：检测到异常"
+  "m_689cbff116de": "HTTPS 监控 {0}：检测到异常",
+  "flow.csv_schema_title": "预期的 CSV 格式",
+  "flow.csv_schema_help": "请使用这些确切的列名。url 为必填列，其他列为选填。列之间用逗号分隔，同一单元格中的多个人员用分号分隔，并保持姓名与邮箱的排列顺序一致。",
+  "flow.csv_column_url": "HTTPS URL 或主机名（必填）",
+  "flow.csv_column_business_name": "业务联系人姓名（选填）",
+  "flow.csv_column_business_email": "业务联系人邮箱（选填）",
+  "flow.csv_column_technical_name": "技术联系人姓名（选填）",
+  "flow.csv_column_technical_email": "技术联系人邮箱（选填）",
+  "flow.csv_schema_example": "示例行",
+  "flow.csv_text_label": "CSV 内容"
 }

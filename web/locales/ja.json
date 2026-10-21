@@ -998,5 +998,14 @@
   "m_0be8d57d9f2d": "監視メールの設定が無効です。",
   "m_803a7da0854e": "HTTPS 証明書更新のエスカレーション：{0}",
   "m_6686b60e4ea8": "HTTPS 監視 {0}：サービスが復旧しました",
-  "m_689cbff116de": "HTTPS 監視 {0}：異常を検出しました"
+  "m_689cbff116de": "HTTPS 監視 {0}：異常を検出しました",
+  "flow.csv_schema_title": "CSV の指定形式",
+  "flow.csv_schema_help": "以下のヘッダーを正確に使用してください。url は必須で、その他の列は省略できます。列はカンマで、同じセルに記載する複数の担当者はセミコロンで区切り、名前とメールアドレスの順序を揃えてください。",
+  "flow.csv_column_url": "HTTPS URL またはホスト名（必須）",
+  "flow.csv_column_business_name": "業務担当者の名前（任意）",
+  "flow.csv_column_business_email": "業務担当者のメールアドレス（任意）",
+  "flow.csv_column_technical_name": "技術担当者の名前（任意）",
+  "flow.csv_column_technical_email": "技術担当者のメールアドレス（任意）",
+  "flow.csv_schema_example": "行の記入例",
+  "flow.csv_text_label": "CSV の内容"
 }

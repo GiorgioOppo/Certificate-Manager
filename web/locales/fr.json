@@ -998,5 +998,14 @@
   "m_0be8d57d9f2d": "Configuration des emails de surveillance non valide.",
   "m_803a7da0854e": "Escalade du renouvellement du certificat HTTPS {0}",
   "m_6686b60e4ea8": "Surveillance HTTPS {0} : service rétabli",
-  "m_689cbff116de": "Surveillance HTTPS {0} : anomalie détectée"
+  "m_689cbff116de": "Surveillance HTTPS {0} : anomalie détectée",
+  "flow.csv_schema_title": "Format CSV attendu",
+  "flow.csv_schema_help": "Utilisez exactement ces en-têtes. url est obligatoire ; les autres colonnes sont facultatives. Séparez les colonnes par des virgules et les personnes dans une même cellule par des points-virgules, en conservant le même ordre pour les noms et les adresses email.",
+  "flow.csv_column_url": "URL HTTPS ou nom d’hôte (obligatoire)",
+  "flow.csv_column_business_name": "Noms des contacts métier (facultatif)",
+  "flow.csv_column_business_email": "Adresses email des contacts métier (facultatif)",
+  "flow.csv_column_technical_name": "Noms des contacts techniques (facultatif)",
+  "flow.csv_column_technical_email": "Adresses email des contacts techniques (facultatif)",
+  "flow.csv_schema_example": "Exemple de ligne",
+  "flow.csv_text_label": "Contenu CSV"
 }

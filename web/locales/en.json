@@ -998,5 +998,14 @@
   "m_0be8d57d9f2d": "Invalid monitor email configuration.",
   "m_803a7da0854e": "HTTPS certificate renewal escalation: {0}",
   "m_6686b60e4ea8": "HTTPS monitor {0}: service recovered",
-  "m_689cbff116de": "HTTPS monitor {0}: problem detected"
+  "m_689cbff116de": "HTTPS monitor {0}: problem detected",
+  "flow.csv_schema_title": "Expected CSV format",
+  "flow.csv_schema_help": "Use these exact headers. url is required; the other columns are optional. Separate columns with commas and multiple people in the same cell with semicolons, keeping names and email addresses in the same order.",
+  "flow.csv_column_url": "HTTPS URL or hostname (required)",
+  "flow.csv_column_business_name": "Business contact names (optional)",
+  "flow.csv_column_business_email": "Business contact email addresses (optional)",
+  "flow.csv_column_technical_name": "Technical contact names (optional)",
+  "flow.csv_column_technical_email": "Technical contact email addresses (optional)",
+  "flow.csv_schema_example": "Example row",
+  "flow.csv_text_label": "CSV content"
 }

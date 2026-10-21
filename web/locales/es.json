@@ -998,5 +998,14 @@
   "m_0be8d57d9f2d": "Configuración del correo de supervisión no válida.",
   "m_803a7da0854e": "Escalamiento de renovación del certificado HTTPS {0}",
   "m_6686b60e4ea8": "Supervisión HTTPS {0}: servicio restablecido",
-  "m_689cbff116de": "Supervisión HTTPS {0}: anomalía detectada"
+  "m_689cbff116de": "Supervisión HTTPS {0}: anomalía detectada",
+  "flow.csv_schema_title": "Formato CSV esperado",
+  "flow.csv_schema_help": "Usa exactamente estos encabezados. url es obligatoria; las demás columnas son opcionales. Separa las columnas con comas y las personas de una misma celda con punto y coma, manteniendo el mismo orden entre nombres y correos.",
+  "flow.csv_column_url": "URL HTTPS o nombre de host (obligatorio)",
+  "flow.csv_column_business_name": "Nombres de los contactos responsables (opcional)",
+  "flow.csv_column_business_email": "Correos de los contactos responsables (opcional)",
+  "flow.csv_column_technical_name": "Nombres de los contactos técnicos (opcional)",
+  "flow.csv_column_technical_email": "Correos de los contactos técnicos (opcional)",
+  "flow.csv_schema_example": "Ejemplo de una fila",
+  "flow.csv_text_label": "Contenido CSV"
 }

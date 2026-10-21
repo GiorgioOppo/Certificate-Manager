@@ -998,5 +998,14 @@
   "m_0be8d57d9f2d": "Configurazione email monitor non valida.",
   "m_803a7da0854e": "Escalation rinnovo certificato HTTPS {0}",
   "m_6686b60e4ea8": "Monitor HTTPS {0}: servizio ripristinato",
-  "m_689cbff116de": "Monitor HTTPS {0}: anomalia rilevata"
+  "m_689cbff116de": "Monitor HTTPS {0}: anomalia rilevata",
+  "flow.csv_schema_title": "Formato CSV atteso",
+  "flow.csv_schema_help": "Usa queste intestazioni esatte. url è obbligatoria; le altre colonne sono facoltative. Separa le colonne con virgole e più persone nella stessa cella con punto e virgola, mantenendo lo stesso ordine tra nomi ed email.",
+  "flow.csv_column_url": "URL HTTPS o hostname (obbligatorio)",
+  "flow.csv_column_business_name": "Nomi dei referenti (facoltativo)",
+  "flow.csv_column_business_email": "Email dei referenti (facoltativo)",
+  "flow.csv_column_technical_name": "Nomi dei referenti tecnici (facoltativo)",
+  "flow.csv_column_technical_email": "Email dei referenti tecnici (facoltativo)",
+  "flow.csv_schema_example": "Esempio di una riga",
+  "flow.csv_text_label": "Contenuto CSV"
 }
