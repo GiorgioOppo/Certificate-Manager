@@ -16,7 +16,7 @@ Il percorso operativo è: **acquisizione del certificato → registro e referent
 
 Il browser dialoga con le API del backend C, che legge e aggiorna SQLite. Il backend esegue i controlli periodici, interroga i servizi HTTPS e prepara la coda email. Le scadenze producono messaggi per i referenti; i rinnovi producono allegati PEM per i tecnici; le anomalie dei servizi restano visibili nell’interfaccia. I tecnici installano il certificato sul servizio esternamente al programma.
 
-La [spiegazione completa del workflow](WORKFLOW.it.md) contiene i diagrammi dei componenti e del rinnovo, le frequenze, i ruoli e un esempio operativo. È disponibile anche [in inglese](WORKFLOW.md).
+La pagina **Workflow** (`/workflow`) presenta i diagrammi e la spiegazione direttamente nell’interfaccia, in tutte e sei le lingue e senza dipendenze esterne. La [spiegazione completa del workflow](WORKFLOW.it.md) contiene i diagrammi dei componenti e del rinnovo, le frequenze, i ruoli e un esempio operativo. È disponibile anche [in inglese](WORKFLOW.md).
 
 ## Installazione e avvio
 
@@ -55,7 +55,7 @@ L'archivio predefinito è `certificati.db` nella cartella da cui avvii il progra
 
 ## Navigazione dell’interfaccia
 
-L’interfaccia è suddivisa in **sette pagine**, ciascuna con il proprio indirizzo e soltanto i controlli della funzione scelta. Il menu laterale apre la pagina corrispondente; su schermi piccoli mantiene le etichette e scorre orizzontalmente.
+L’interfaccia è suddivisa in **otto pagine**, ciascuna con il proprio indirizzo e soltanto i controlli della funzione scelta. Il menu laterale apre la pagina corrispondente; su schermi piccoli mantiene le etichette e scorre orizzontalmente.
 
 | Pagina | Indirizzo | Contenuto |
 | --- | --- | --- |
@@ -66,6 +66,7 @@ L’interfaccia è suddivisa in **sette pagine**, ciascuna con il proprio indiri
 | Verifica endpoint | `/verifica` | Recupero e confronto del certificato esposto da un servizio. |
 | Promemoria | `/promemoria` | Scadenze registrate e preferenze delle notifiche desktop. |
 | Coda email | `/email` | Messaggi preparati, stato degli invii e download `.eml`. |
+| Workflow | `/workflow` | Diagrammi e spiegazione di acquisizione, controlli, rinnovo e invii. |
 
 Ogni indirizzo può essere aperto direttamente, aggiunto ai preferiti o ricaricato. Puoi usare Indietro e Avanti del browser. Ricerca e filtri del registro vengono ricordati nella stessa scheda. Salva le modifiche ai referenti e ai monitor prima di cambiare pagina; il cambio pagina carica un documento nuovo.
 
@@ -202,7 +203,7 @@ Richiede un compilatore C11, OpenSSL, SQLite almeno 3.24, libcurl con supporto S
 make test
 ```
 
-La suite comprende test C sulle soglie, i destinatari e la coda, e test di integrazione Python su importazione PEM/DER/bundle, migrazione, catene CA, referenti multipli, rinnovo e sostituzione, distribuzione pubblica, deduplicazione, anteprime `.eml`, eliminazione e API HTTP con controlli CSRF e Host. La suite online avvia server TLS locali con CA temporanee e controlla fiducia, nomi, scadenze, errori TCP/TLS e importazione della stessa acquisizione scaricabile. I test dei monitor verificano controlli automatici, cambiamenti, ripristini, deduplicazione degli avvisi, persistenza, rinnovo e disponibilità dell'interfaccia durante un collegamento TLS bloccato. I test delle pagine verificano i sette indirizzi diretti, la separazione dei contenuti, la navigazione e le intestazioni di sicurezza. I test SMTP verificano cifratura e conservazione delle password, migrazione, configurazione via API, priorità sulla configurazione ambiente e collegamenti TLS autenticati senza invio durante la prova. I test usano database e certificati temporanei, non richiedono SMTP reale e non contattano siti pubblici.
+La suite comprende test C sulle soglie, i destinatari e la coda, e test di integrazione Python su importazione PEM/DER/bundle, migrazione, catene CA, referenti multipli, rinnovo e sostituzione, distribuzione pubblica, deduplicazione, anteprime `.eml`, eliminazione e API HTTP con controlli CSRF e Host. La suite online avvia server TLS locali con CA temporanee e controlla fiducia, nomi, scadenze, errori TCP/TLS e importazione della stessa acquisizione scaricabile. I test dei monitor verificano controlli automatici, cambiamenti, ripristini, deduplicazione degli avvisi, persistenza, rinnovo e disponibilità dell'interfaccia durante un collegamento TLS bloccato. I test delle pagine verificano gli otto indirizzi diretti, la separazione dei contenuti, la navigazione e le intestazioni di sicurezza. I test SMTP verificano cifratura e conservazione delle password, migrazione, configurazione via API, priorità sulla configurazione ambiente e collegamenti TLS autenticati senza invio durante la prova. I test usano database e certificati temporanei, non richiedono SMTP reale e non contattano siti pubblici.
 
 Per provare un eseguibile alternativo:
 

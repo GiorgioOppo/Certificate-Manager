@@ -6,7 +6,7 @@ Build the application using the dependencies and commands in [README.md](README.
 
 - `src/`: C backend, certificate parsing, SQLite storage, local HTTP server, TLS checks, monitors and email delivery.
 - `web/`: shared HTML, CSS, JavaScript and language resources.
-- `scripts/embed_assets.py`: generates the seven page documents and embeds interface assets during the build.
+- `scripts/embed_assets.py`: generates the eight page documents and embeds interface assets during the build.
 - `tests/`: C unit tests and Python integration tests.
 - `docs/`: workflow explanations in English and Italian, the Italian user guide, translation and publication guidance.
 

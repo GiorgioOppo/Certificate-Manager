@@ -38,6 +38,8 @@ PAGES = (
          "Consulta gli avvisi di scadenza e gestisci le notifiche desktop."),
     Page("delivery", "/email", "Coda email", "Comunicazioni",
          "Consulta i promemoria ai referenti e le distribuzioni ai referenti tecnici."),
+    Page("workflow", "/workflow", "Workflow", "Come funziona",
+         "Scopri come dialogano interfaccia, registro, controlli e invii email."),
 )
 
 LANGUAGES = ("it", "en", "fr", "es", "zh-CN", "ja")

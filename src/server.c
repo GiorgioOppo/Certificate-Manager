@@ -645,7 +645,8 @@ static int serve_ui_page(int fd, const char *target) {
         { "/importa", asset_import_html, asset_import_html_size },
         { "/verifica", asset_verify_html, asset_verify_html_size },
         { "/promemoria", asset_reminders_html, asset_reminders_html_size },
-        { "/email", asset_delivery_html, asset_delivery_html_size }
+        { "/email", asset_delivery_html, asset_delivery_html_size },
+        { "/workflow", asset_workflow_html, asset_workflow_html_size }
     };
     size_t length = strcspn(target, "?");
     if (length > 1 && target[length - 1] == '/' && target[length - 2] != '/') length--;

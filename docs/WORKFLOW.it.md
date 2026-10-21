@@ -4,6 +4,8 @@
 
 Certificate Manager segue il certificato dall'acquisizione al rinnovo e controlla che i servizi monitorati espongano quello previsto nel registro. La CA fornisce il rinnovo firmato; il programma lo registra e ne distribuisce il materiale pubblico; i referenti tecnici lo installano sul servizio.
 
+L’interfaccia web comprende anche la pagina **Workflow**, all’indirizzo `/workflow`, con i diagrammi dei componenti, del ciclo operativo e del rinnovo in tutte e sei le lingue. I diagrammi sono inclusi nell’eseguibile e funzionano senza caricare un servizio esterno.
+
 ## Come dialogano i componenti
 
 ```mermaid
@@ -19,7 +21,7 @@ flowchart TD
     SMTP --> Contacts["Referenti e referenti tecnici"]
 ```
 
-Il browser offre le sette pagine e chiama il backend su `127.0.0.1`. Il backend gestisce validazione, operazioni sui certificati, controlli pianificati e salvataggio dei dati. Gli aggiornamenti della pagina leggono lo stato salvato; chiudere il browser non ferma i controlli del backend. Le acquisizioni di rete dei monitor avvengono in un processo separato, così un servizio TLS lento non occupa il gestore delle richieste web.
+Il browser offre le otto pagine e chiama il backend su `127.0.0.1`. Il backend gestisce validazione, operazioni sui certificati, controlli pianificati e salvataggio dei dati. Gli aggiornamenti della pagina leggono lo stato salvato; chiudere il browser non ferma i controlli del backend. Le acquisizioni di rete dei monitor avvengono in un processo separato, così un servizio TLS lento non occupa il gestore delle richieste web.
 
 | Parte | Responsabilità | Sorgente |
 | --- | --- | --- |

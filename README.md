@@ -104,8 +104,9 @@ The database's parent directory must already exist. The executable and command n
 | Verify endpoint | `/verifica` | Retrieve and compare the certificate presented by a service. |
 | Reminders | `/promemoria` | Expiry reminders and optional desktop notifications. |
 | Email queue | `/email` | SMTP settings, delivery state and `.eml` downloads. |
+| Workflow | `/workflow` | Component diagrams and explanations of acquisition, checks, renewal and delivery. |
 
-Each page supports direct navigation, reload and browser history. Registry rows become readable cards on narrow screens.
+Each page supports direct navigation, reload and browser history. Registry rows become readable cards on narrow screens. The Workflow page explains how the components communicate, with diagrams available locally in every interface language.
 
 Select a language in the interface: English (`en`), Italiano (`it`), Français (`fr`), Español (`es`), 简体中文 (`zh-CN`) or 日本語 (`ja`). Dates and times follow the selected language. Language changes preserve registry filters; save or cancel form drafts first. Translations apply to interface text; certificate subjects, contact names and other user data retain their original content. The command-line interface and generated email message content remain in Italian.
 
@@ -177,7 +178,7 @@ Stop every application process using a database before copying it. Back up its `
 make test
 ```
 
-The suite covers certificate parsing, chain reconstruction, reminders, role assignments, renewals, queue behavior, encrypted SMTP settings, migrations, HTTP/CSRF checks, the seven web pages, endpoint verification and background monitoring. Network tests use local TLS/SMTP peers and temporary certificates; they do not require a real SMTP account or contact public HTTPS sites. Node.js is used for interface checks.
+The suite covers certificate parsing, chain reconstruction, reminders, role assignments, renewals, queue behavior, encrypted SMTP settings, migrations, HTTP/CSRF checks, the eight web pages, endpoint verification and background monitoring. Network tests use local TLS/SMTP peers and temporary certificates; they do not require a real SMTP account or contact public HTTPS sites. Node.js is used for interface checks.
 
 The [GitHub Actions workflow](.github/workflows/ci.yml) builds and tests on Ubuntu on each push and pull request. It uses the official [checkout](https://github.com/actions/checkout) and [setup-node](https://github.com/actions/setup-node) actions. See [Contributing](CONTRIBUTING.md) for source layout and [Publishing to GitHub](docs/PUBLISHING.md) for publication steps.
 

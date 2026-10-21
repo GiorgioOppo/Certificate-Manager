@@ -4,6 +4,8 @@
 
 Certificate Manager follows a certificate from acquisition to renewal and checks that monitored services present the expected certificate. The CA supplies the signed renewal; the application records it and distributes its public material; technical contacts install it on the service.
 
+The web interface also includes a **Workflow** page at `/workflow`, with component, lifecycle and renewal diagrams in all six interface languages. Its diagrams are included in the executable and work without loading an external diagram service.
+
 ## How the components communicate
 
 ```mermaid
@@ -19,7 +21,7 @@ flowchart TD
     SMTP --> Contacts["Business and technical contacts"]
 ```
 
-The browser provides the seven pages and calls the backend on `127.0.0.1`. The backend owns validation, certificate operations, scheduling and persistence. Browser refreshes retrieve saved state; closing the browser does not stop backend checks. Monitoring network acquisition runs in a separate process so a slow TLS peer does not occupy the web request handler.
+The browser provides the eight pages and calls the backend on `127.0.0.1`. The backend owns validation, certificate operations, scheduling and persistence. Browser refreshes retrieve saved state; closing the browser does not stop backend checks. Monitoring network acquisition runs in a separate process so a slow TLS peer does not occupy the web request handler.
 
 | Part | Responsibility | Source |
 | --- | --- | --- |

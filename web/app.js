@@ -53,9 +53,43 @@
     main: '/', overview: '/', registry: '/certificati', monitoring: '/servizi',
     'monitor-form': '/servizi#monitor-form', 'monitor-alerts': '/servizi#monitor-alerts',
     'remote-check': '/verifica', verify: '/verifica', acquire: '/importa',
-    'import-panel': '/importa', reminders: '/promemoria', delivery: '/email'
+    'import-panel': '/importa', reminders: '/promemoria', delivery: '/email', workflow: '/workflow'
   };
   let initialContextApplied = false;
+  function initializeWorkflow() {
+    const tabs = Array.from(document.querySelectorAll('.workflow-tab'));
+    if (!tabs.length) return;
+    function select(tab, { focus = false, updateHash = false } = {}) {
+      for (const item of tabs) {
+        const selected = item === tab;
+        item.setAttribute('aria-selected', String(selected));
+        item.tabIndex = selected ? 0 : -1;
+        byId(item.getAttribute('aria-controls')).hidden = !selected;
+      }
+      if (focus) tab.focus({ preventScroll: true });
+      if (updateHash) {
+        const url = new URL(window.location.href);
+        url.hash = tab.getAttribute('aria-controls');
+        window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+      }
+    }
+    const fromHash = () => tabs.find(tab => '#' + tab.getAttribute('aria-controls') === window.location.hash) || tabs[0];
+    tabs.forEach((tab, index) => {
+      tab.addEventListener('click', () => select(tab, { updateHash: true }));
+      tab.addEventListener('keydown', event => {
+        let next;
+        if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+        else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+        else if (event.key === 'Home') next = 0;
+        else if (event.key === 'End') next = tabs.length - 1;
+        else return;
+        event.preventDefault();
+        select(tabs[next], { focus: true, updateHash: true });
+      });
+    });
+    window.addEventListener('hashchange', () => select(fromHash()));
+    select(fromHash());
+  }
   const registryContactSelection = { business: '', technical: '' };
   const registryContactSignatures = { business: '', technical: '' };
   const registryCASelection = { root_ca: '', intermediate_ca: '' };
@@ -1826,6 +1860,7 @@
       message(i18n.serverMessage('Modifica della lingua non disponibile durante un’operazione. Attendi il completamento.'), true);
     }
   });
+  initializeWorkflow();
   restoreRegistryFilters();
   restoreDesktopPreference();
   let legacyId = '';

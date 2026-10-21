@@ -29,11 +29,18 @@ class LanguageDocument(ui.PageDocument):
         self.scripts = []
         self.in_languages = False
         self.option = None
+        self.workflow_depth = 0
+        self.workflow_keys = set()
         super().__init__(content)
 
     def handle_starttag(self, tag, attributes):
         super().handle_starttag(tag, attributes)
         attrs = dict(attributes)
+        if tag == "section" and (self.workflow_depth or attrs.get("data-view") == "workflow"):
+            self.workflow_depth += 1
+        if self.workflow_depth:
+            self.workflow_keys.update(value for name, value in attributes
+                                      if name == "data-i18n" or name.startswith("data-i18n-"))
         if tag == "select" and attrs.get("id") == "language-select":
             self.language_selects += 1
             self.in_languages = True
@@ -47,6 +54,8 @@ class LanguageDocument(ui.PageDocument):
             self.option[1] += value
 
     def handle_endtag(self, tag):
+        if tag == "section" and self.workflow_depth:
+            self.workflow_depth -= 1
         if tag == "option" and self.option is not None:
             self.options.append(tuple(self.option))
             self.option = None
@@ -116,6 +125,29 @@ class I18nHttpTests(unittest.TestCase):
         # Browser language selection must not turn an unknown path into a valid page.
         status, _, _ = self.http("GET", "/not-a-page?lang=ja")
         self.assertEqual(status, 404)
+
+    def test_workflow_explanations_and_diagrams_are_available_in_all_six_languages(self):
+        status, _, body = self.http("GET", "/workflow")
+        self.assertEqual(status, 200, body[:200])
+        document = LanguageDocument(body)
+        self.assertTrue(document.workflow_keys, "Workflow content must participate in localization")
+        status, _, body = self.http("GET", "/i18n-catalogs.js")
+        self.assertEqual(status, 200, body[:200])
+        source = body.decode("utf-8")
+        prefix = "window.CertificateManagerCatalogs="
+        self.assertTrue(source.startswith(prefix))
+        catalogs, _ = json.JSONDecoder().raw_decode(source[len(prefix):])
+        for language in LANGUAGES:
+            with self.subTest(language=language):
+                self.assertIn(language, catalogs)
+                for key in document.workflow_keys:
+                    self.assertIn(key, catalogs[language], (language, key))
+                    self.assertTrue(catalogs[language][key].strip(), (language, key))
+        # These explanations must have genuine translations rather than an
+        # untranslated Italian fallback for the entire page.
+        for language in set(LANGUAGES) - {"it"}:
+            self.assertTrue(any(catalogs[language][key] != catalogs["it"][key]
+                                for key in document.workflow_keys), language)
 
     def test_languages_do_not_translate_certificate_or_contact_data_in_the_api(self):
         with tempfile.TemporaryDirectory(prefix="certificate-manager-i18n-") as directory:

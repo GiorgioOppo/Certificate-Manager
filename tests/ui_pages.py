@@ -16,6 +16,7 @@ PAGES = {
     "/verifica": ("verify", "remote-form"),
     "/promemoria": ("reminders", "notification-list"),
     "/email": ("delivery", "outbox-list"),
+    "/workflow": ("workflow", "workflow-components"),
 }
 
 
@@ -26,6 +27,9 @@ class PageDocument(HTMLParser):
         self.views = []
         self.ids = []
         self.navigation = []
+        self.asset_urls = []
+        self.inline_handlers = []
+        self.script_elements = []
         self.feed(content.decode("utf-8"))
         self.close()
 
@@ -39,6 +43,13 @@ class PageDocument(HTMLParser):
             self.views.append((tag, attrs["data-view"]))
         if tag == "a" and "nav-link" in attrs.get("class", "").split():
             self.navigation.append(attrs)
+        if tag in ("script", "img", "iframe", "source") and attrs.get("src"):
+            self.asset_urls.append(attrs["src"])
+        if tag == "link" and attrs.get("href"):
+            self.asset_urls.append(attrs["href"])
+        if tag == "script":
+            self.script_elements.append(attrs)
+        self.inline_handlers.extend(name for name in attrs if name.startswith("on"))
 
 
 class UiPagesTests(unittest.TestCase):
@@ -86,12 +97,28 @@ class UiPagesTests(unittest.TestCase):
 
     def test_direct_links_query_context_and_refresh(self):
         # Context is read by page JavaScript, without turning it into an API route.
-        for path in ("/servizi?certificate_id=1", "/verifica?certificate_id=1"):
+        for path in ("/servizi?certificate_id=1", "/verifica?certificate_id=1", "/workflow?lang=it"):
             expected_path = path.split("?", 1)[0]
             with self.subTest(path=path):
                 first = self.assert_page(path, expected_path)
                 self.assertEqual(self.assert_page(path, expected_path), first)
         self.assert_page("/certificati/", "/certificati")
+        self.assert_page("/workflow/", "/workflow")
+
+    def test_workflow_uses_only_embedded_local_assets(self):
+        content = self.assert_page("/workflow", "/workflow")
+        document = PageDocument(content)
+        for diagram in ("workflow-component-diagram", "workflow-lifecycle-diagram", "workflow-renewal-diagram"):
+            self.assertIn(diagram, document.ids)
+        self.assertTrue(document.asset_urls)
+        for asset in document.asset_urls:
+            self.assertTrue(asset.startswith("/") and not asset.startswith("//"), asset)
+            status, _, body = self.http("GET", asset)
+            self.assertEqual(status, 200, asset)
+            self.assertTrue(body, asset)
+        self.assertTrue(document.script_elements)
+        self.assertTrue(all(script.get("src") for script in document.script_elements))
+        self.assertEqual(document.inline_handlers, [])
 
     def test_missing_pages_do_not_fall_back_to_a_long_single_document(self):
         for path in ("/pagina-inesistente", "/servizi/altro", "//", "/api/pagina-inesistente"):
