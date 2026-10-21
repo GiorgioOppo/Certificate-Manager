@@ -18,6 +18,9 @@ int lifecycle_link_existing(Store *store, int64_t old_certificate_id,
 int lifecycle_request_install(Store *store, int64_t job_id, int64_t monitor_id,
     char *err, size_t errlen);
 int lifecycle_finish(Store *store, int64_t job_id, char *err, size_t errlen);
+/* Read-only view of the exact completion gate, including unsnapshotted services. */
+int lifecycle_checklist(Store *store, int64_t job_id, FILE *out,
+    int *can_complete, char *err, size_t errlen);
 /* Explicit retirement is separate from verified installation and needs a note. */
 int lifecycle_retire(Store *store, int64_t job_id, char *err, size_t errlen);
 

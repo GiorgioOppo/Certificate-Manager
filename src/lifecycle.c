@@ -2,9 +2,12 @@
 #include "lifecycle.h"
 #include "app.h"
 #include "chain.h"
+#include "operations.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <inttypes.h>
 #include <time.h>
 
 static int db_error(Store *s, char *err, size_t n) {
@@ -33,14 +36,15 @@ static int bind_text(sqlite3_stmt *stmt, int col, const char *value) {
     return sqlite3_bind_text(stmt, col, value ? value : "", -1, SQLITE_TRANSIENT) == SQLITE_OK;
 }
 
-static int end_transaction(Store *s, const char *name, int ok, char *err, size_t n) {
+static int end_transaction(Store *s, const char *name, int ok, int outer, char *err, size_t n) {
     char command[128];
     if (ok) {
         snprintf(command, sizeof command, "RELEASE %s", name);
         ok = store_exec(s, command, err, n);
     }
     if (!ok) {
-        snprintf(command, sizeof command, "ROLLBACK TO %s; RELEASE %s", name, name);
+        if (outer) snprintf(command, sizeof command, "ROLLBACK");
+        else snprintf(command, sizeof command, "ROLLBACK TO %s; RELEASE %s", name, name);
         sqlite3_exec(s->db, command, NULL, NULL, NULL);
     }
     return ok;
@@ -106,6 +110,7 @@ int lifecycle_set_plan(Store *s, int64_t job_id, int64_t old_id,
         return error(err, n, "L'installazione pianificata non può precedere il rinnovo pianificato.");
     int64_t now = (int64_t)time(NULL);
     if (!requested_at) requested_at = now;
+    int outer = sqlite3_get_autocommit(s->db);
     if (!store_exec(s, "SAVEPOINT lifecycle_plan", err, n)) return 0;
     sqlite3_stmt *stmt = NULL;
     int ok = 0;
@@ -142,7 +147,7 @@ int lifecycle_set_plan(Store *s, int64_t job_id, int64_t old_id,
     ok = 1;
 done:
     sqlite3_finalize(stmt);
-    ok = end_transaction(s, "lifecycle_plan", ok, err, n);
+    ok = end_transaction(s, "lifecycle_plan", ok, outer, err, n);
     if (ok && saved_id) *saved_id = job_id;
     return ok;
 }
@@ -160,6 +165,7 @@ int lifecycle_link_existing(Store *s, int64_t old_id, int64_t new_id,
     if (queued) *queued = 0;
     if (old_id <= 0 || new_id <= 0 || old_id == new_id)
         return error(err, n, "Collega due certificati distinti.");
+    int outer = sqlite3_get_autocommit(s->db);
     if (!store_exec(s, "SAVEPOINT lifecycle_link", err, n)) return 0;
     sqlite3_stmt *stmt = NULL;
     int ok = 0, count = 0;
@@ -230,7 +236,7 @@ int lifecycle_link_existing(Store *s, int64_t old_id, int64_t new_id,
     ok = 1;
 done:
     sqlite3_finalize(stmt);
-    ok = end_transaction(s, "lifecycle_link", ok, err, n);
+    ok = end_transaction(s, "lifecycle_link", ok, outer, err, n);
     if (ok) { if (job_id) *job_id = id; if (queued) *queued = count; }
     return ok;
 }
@@ -238,6 +244,7 @@ done:
 int lifecycle_request_install(Store *s, int64_t job_id, int64_t monitor_id,
     char *err, size_t n) {
     if (job_id <= 0 || monitor_id < 0) return error(err, n, "Pratica o servizio non valido.");
+    int outer = sqlite3_get_autocommit(s->db);
     if (!store_exec(s, "SAVEPOINT lifecycle_install", err, n)) return 0;
     sqlite3_stmt *stmt = NULL;
     int ok = 0;
@@ -266,7 +273,7 @@ int lifecycle_request_install(Store *s, int64_t job_id, int64_t monitor_id,
     ok = step(s, &stmt, err, n);
 done:
     sqlite3_finalize(stmt);
-    return end_transaction(s, "lifecycle_install", ok, err, n);
+    return end_transaction(s, "lifecycle_install", ok, outer, err, n);
 }
 
 int lifecycle_fingerprint_approved(Store *s, int64_t monitor_id,
@@ -304,7 +311,99 @@ int lifecycle_record_monitor(Store *s, int64_t monitor_id, int64_t now,
     return step(s, &stmt, err, n);
 }
 
+static void reason(FILE *out, int *first, const char *code) {
+    if (!out) return;
+    if (!*first) fputc(',', out);
+    *first = 0;
+    app_json_string(out, code);
+}
+
+int lifecycle_checklist(Store *s, int64_t job_id, FILE *out,
+    int *can_complete, char *err, size_t n) {
+    if (can_complete) *can_complete = 0;
+    sqlite3_stmt *q = NULL;
+    int64_t now = (int64_t)time(NULL), old_id = 0, new_id = 0;
+    int closed = 0, replacement_ok = 0, total = 0, blocked = 0, conflicts = 0;
+    if (!prepare(s, &q, "SELECT j.old_certificate_id,coalesce(j.new_certificate_id,0),j.status,"
+        "coalesce(c.archived=0 AND c.not_before<=?2 AND c.not_after>?2,0) "
+        "FROM renewal_jobs j LEFT JOIN certificates c ON c.id=j.new_certificate_id WHERE j.id=?1", err, n)) return 0;
+    sqlite3_bind_int64(q, 1, job_id); sqlite3_bind_int64(q, 2, now);
+    if (sqlite3_step(q) != SQLITE_ROW) { sqlite3_finalize(q); return error(err, n, "Pratica di rinnovo non trovata."); }
+    old_id = sqlite3_column_int64(q, 0); new_id = sqlite3_column_int64(q, 1);
+    const char *status = (const char *)sqlite3_column_text(q, 2);
+    closed = !strcmp(status, "verified") || !strcmp(status, "retired");
+    replacement_ok = sqlite3_column_int(q, 3);
+    sqlite3_finalize(q); q = NULL;
+    if (!prepare(s, &q, "SELECT count(*) FROM monitors a JOIN monitors b ON a.target=b.target WHERE a.certificate_id=?1 AND b.certificate_id=?2", err, n)) return 0;
+    sqlite3_bind_int64(q, 1, old_id); sqlite3_bind_int64(q, 2, new_id);
+    if (sqlite3_step(q) != SQLITE_ROW) { sqlite3_finalize(q); return db_error(s, err, n); }
+    conflicts = sqlite3_column_int(q, 0); sqlite3_finalize(q); q = NULL;
+    if (out) fprintf(out, "{\"job_id\":%"PRId64",\"now\":%"PRId64",\"freshness_seconds\":900,\"endpoints\":[", job_id, now);
+    if (!prepare(s, &q,
+        "WITH ids AS (SELECT monitor_id FROM renewal_endpoints WHERE job_id=?1 UNION SELECT id FROM monitors WHERE certificate_id=?2) "
+        "SELECT m.id,m.target,m.enabled,m.last_checked_at,m.last_status,m.verified,m.last_fingerprint,m.certificate_id,"
+        "e.verify_requested_at,e.verified_at,c.fingerprint,"
+        "EXISTS(SELECT 1 FROM monitors b WHERE b.target=m.target AND b.certificate_id=?3 AND m.certificate_id=?2),"
+        "e.job_id IS NOT NULL FROM ids JOIN monitors m ON m.id=ids.monitor_id "
+        "LEFT JOIN renewal_endpoints e ON e.monitor_id=m.id AND e.job_id=?1 "
+        "LEFT JOIN certificates c ON c.id=?3 ORDER BY m.id", err, n)) return 0;
+    sqlite3_bind_int64(q, 1, job_id); sqlite3_bind_int64(q, 2, old_id); sqlite3_bind_int64(q, 3, new_id);
+    int rc;
+    while ((rc = sqlite3_step(q)) == SQLITE_ROW) {
+        int first = 1, failures = 0;
+        int64_t requested = sqlite3_column_int64(q, 8), verified_at = sqlite3_column_int64(q, 9), checked = sqlite3_column_int64(q, 3);
+        const char *observed = (const char *)sqlite3_column_text(q, 6), *expected = (const char *)sqlite3_column_text(q, 10);
+        if (out) {
+            if (total) fputc(',', out);
+            fprintf(out, "{\"monitor_id\":%lld,\"target\":", (long long)sqlite3_column_int64(q, 0)); app_json_string(out, (const char *)sqlite3_column_text(q, 1));
+            fprintf(out, ",\"enabled\":%s,\"certificate_id\":%lld,\"verify_requested_at\":", sqlite3_column_int(q,2)?"true":"false",(long long)sqlite3_column_int64(q,7));
+            if (sqlite3_column_type(q,8)==SQLITE_NULL) fputs("null",out); else fprintf(out,"%"PRId64,requested);
+            fputs(",\"verified_at\":",out); if(sqlite3_column_type(q,9)==SQLITE_NULL)fputs("null",out);else fprintf(out,"%"PRId64,verified_at);
+            fputs(",\"last_checked_at\":",out); if(sqlite3_column_type(q,3)==SQLITE_NULL)fputs("null",out);else fprintf(out,"%"PRId64,checked);
+            fputs(",\"last_status\":",out);app_json_string(out,(const char*)sqlite3_column_text(q,4));
+            fputs(",\"expected_fingerprint\":",out);app_json_string(out,expected);
+            fputs(",\"observed_fingerprint\":",out);app_json_string(out,observed);
+            fputs(",\"reason_codes\":[",out);
+        }
+#define FAIL_IF(condition, code) do { if (condition) { failures++; reason(out, &first, code); } } while (0)
+        FAIL_IF(!sqlite3_column_int(q,2), "service_paused");
+        FAIL_IF(sqlite3_column_type(q,8)==SQLITE_NULL, "verification_not_requested");
+        FAIL_IF(sqlite3_column_type(q,8)!=SQLITE_NULL && requested<now-900, "request_stale");
+        FAIL_IF(sqlite3_column_type(q,9)==SQLITE_NULL, "installation_not_verified");
+        FAIL_IF(sqlite3_column_type(q,9)!=SQLITE_NULL && verified_at<now-900, "proof_stale");
+        FAIL_IF(sqlite3_column_type(q,9)!=SQLITE_NULL && sqlite3_column_type(q,8)!=SQLITE_NULL && verified_at<requested, "proof_before_request");
+        FAIL_IF(sqlite3_column_type(q,3)==SQLITE_NULL, "service_not_checked");
+        FAIL_IF(sqlite3_column_type(q,3)!=SQLITE_NULL && checked<now-900, "check_stale");
+        FAIL_IF(sqlite3_column_type(q,3)!=SQLITE_NULL && sqlite3_column_type(q,8)!=SQLITE_NULL && checked<requested, "check_before_request");
+        FAIL_IF(sqlite3_column_int(q,5)!=1, "tls_not_verified");
+        FAIL_IF(strcmp((const char *)sqlite3_column_text(q,4),"ok"), "service_not_ok");
+        FAIL_IF(!expected || !observed || strcasecmp(expected,observed), "fingerprint_mismatch");
+        FAIL_IF(sqlite3_column_int64(q,7)!=old_id && sqlite3_column_int64(q,7)!=new_id, "association_changed");
+        FAIL_IF(sqlite3_column_int(q,11), "duplicate_target");
+#undef FAIL_IF
+        if (out) fprintf(out, "],\"can_complete\":%s}", failures?"false":"true");
+        total++; if (failures) blocked++;
+    }
+    sqlite3_finalize(q);
+    if (rc != SQLITE_DONE) return db_error(s, err, n);
+    int allowed = !closed && replacement_ok && total && !blocked && !conflicts;
+    if (can_complete) *can_complete = allowed;
+    if (out) {
+        fprintf(out, "],\"endpoint_count\":%d,\"blocked_endpoint_count\":%d,\"duplicate_target_count\":%d,\"reason_codes\":[",total,blocked,conflicts);
+        int first=1;
+        if(closed) reason(out,&first,"job_closed");
+        if(!new_id) reason(out,&first,"replacement_missing");
+        else if(!replacement_ok) reason(out,&first,"replacement_not_valid");
+        if(!total) reason(out,&first,"no_endpoints");
+        if(blocked) reason(out,&first,"endpoint_checks_incomplete");
+        if(conflicts) reason(out,&first,"duplicate_targets");
+        fprintf(out,"],\"can_complete\":%s}",allowed?"true":"false");
+    }
+    return 1;
+}
+
 int lifecycle_finish(Store *s, int64_t job_id, char *err, size_t n) {
+    int outer = sqlite3_get_autocommit(s->db);
     if (!store_exec(s, "SAVEPOINT lifecycle_finish", err, n)) return 0;
     sqlite3_stmt *stmt = NULL;
     int ok = 0;
@@ -315,26 +414,12 @@ int lifecycle_finish(Store *s, int64_t job_id, char *err, size_t n) {
     old_id = sqlite3_column_int64(stmt, 0); new_id = sqlite3_column_int64(stmt, 1);
     sqlite3_finalize(stmt); stmt = NULL;
     if (!snapshot_endpoints(s, job_id, old_id, err, n)) goto done;
-    if (!prepare(s, &stmt,
-        "SELECT count(*),coalesce(sum(e.verified_at IS NULL OR e.verify_requested_at IS NULL OR e.verified_at<e.verify_requested_at "
-        "OR e.verified_at<?2-900 OR e.verify_requested_at<?2-900 OR m.last_checked_at IS NULL OR m.last_checked_at<e.verify_requested_at "
-        "OR m.last_checked_at<?2-900 OR m.enabled<>1 OR m.verified<>1 OR m.last_status<>'ok' "
-        "OR m.last_fingerprint<>c.fingerprint COLLATE NOCASE OR m.certificate_id NOT IN(j.old_certificate_id,j.new_certificate_id)),0) "
-        "FROM renewal_endpoints e JOIN renewal_jobs j ON j.id=e.job_id JOIN monitors m ON m.id=e.monitor_id "
-        "JOIN certificates c ON c.id=j.new_certificate_id WHERE e.job_id=?1", err, n)) goto done;
-    sqlite3_bind_int64(stmt, 1, job_id); sqlite3_bind_int64(stmt, 2, now);
-    if (sqlite3_step(stmt) != SQLITE_ROW) { db_error(s, err, n); goto done; }
-    int total = sqlite3_column_int(stmt, 0), missing = sqlite3_column_int(stmt, 1);
-    sqlite3_finalize(stmt); stmt = NULL;
-    if (!total || missing) {
-        error(err, n, "Per chiudere la pratica ogni servizio deve confermare il nuovo certificato con una verifica TLS richiesta negli ultimi 15 minuti."); goto done;
+    int can_complete = 0;
+    if (!lifecycle_checklist(s, job_id, NULL, &can_complete, err, n)) goto done;
+    if (!can_complete) {
+        error(err, n, "Per chiudere ogni servizio deve confermare il nuovo certificato con una verifica TLS richiesta negli ultimi 15 minuti; risolvi anche eventuali URL duplicati."); goto done;
     }
-    if (!prepare(s, &stmt, "SELECT count(*) FROM monitors a JOIN monitors b ON a.target=b.target WHERE a.certificate_id=?1 AND b.certificate_id=?2", err, n)) goto done;
-    sqlite3_bind_int64(stmt, 1, old_id); sqlite3_bind_int64(stmt, 2, new_id);
-    if (sqlite3_step(stmt) != SQLITE_ROW) { db_error(s, err, n); goto done; }
-    int conflicts = sqlite3_column_int(stmt, 0);
-    sqlite3_finalize(stmt); stmt = NULL;
-    if (conflicts) { error(err, n, "Esistono URL duplicati sul nuovo certificato: risolvi le associazioni prima di chiudere la pratica."); goto done; }
+    if (!operations_capture_report(s, job_id, "verified", err, n)) goto done;
     if (!prepare(s, &stmt, "UPDATE monitors SET certificate_id=?2,revision=revision+1,claim_until=0,updated_at=?3 WHERE certificate_id=?1 AND id IN(SELECT monitor_id FROM renewal_endpoints WHERE job_id=?4)", err, n)) goto done;
     sqlite3_bind_int64(stmt, 1, old_id); sqlite3_bind_int64(stmt, 2, new_id); sqlite3_bind_int64(stmt, 3, now); sqlite3_bind_int64(stmt, 4, job_id);
     if (!step(s, &stmt, err, n)) goto done;
@@ -349,10 +434,11 @@ int lifecycle_finish(Store *s, int64_t job_id, char *err, size_t n) {
     ok = step(s, &stmt, err, n);
 done:
     sqlite3_finalize(stmt);
-    return end_transaction(s, "lifecycle_finish", ok, err, n);
+    return end_transaction(s, "lifecycle_finish", ok, outer, err, n);
 }
 
 int lifecycle_retire(Store *s, int64_t job_id, char *err, size_t n) {
+    int outer = sqlite3_get_autocommit(s->db);
     if (!store_exec(s, "SAVEPOINT lifecycle_retire", err, n)) return 0;
     sqlite3_stmt *stmt = NULL;
     int ok = 0;
@@ -370,6 +456,7 @@ int lifecycle_retire(Store *s, int64_t job_id, char *err, size_t n) {
     int remaining = sqlite3_column_int(stmt, 0);
     sqlite3_finalize(stmt); stmt = NULL;
     if (remaining) { error(err, n, "Rimuovi o riassegna i servizi prima del ritiro manuale; anche i servizi in pausa restano associati."); goto done; }
+    if (!operations_capture_report(s, job_id, "retired", err, n)) goto done;
     if (!prepare(s, &stmt, "UPDATE renewal_jobs SET status='retired',finished_at=?2,updated_at=?2 WHERE id=?1", err, n)) goto done;
     sqlite3_bind_int64(stmt, 1, job_id); sqlite3_bind_int64(stmt, 2, now);
     if (!step(s, &stmt, err, n)) goto done;
@@ -381,7 +468,7 @@ int lifecycle_retire(Store *s, int64_t job_id, char *err, size_t n) {
     ok = step(s, &stmt, err, n);
 done:
     sqlite3_finalize(stmt);
-    return end_transaction(s, "lifecycle_retire", ok, err, n);
+    return end_transaction(s, "lifecycle_retire", ok, outer, err, n);
 }
 
 static int json_rows(Store *s, FILE *out, const char *sql, char *err, size_t n) {

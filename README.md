@@ -4,22 +4,22 @@ A local HTTPS certificate registry written in C, with a multilingual web interfa
 
 [GitHub repository](https://github.com/GiorgioOppo/Certificate-Manager)
 
-[Guida completa in italiano](docs/README.it.md) · [Workflow](docs/WORKFLOW.md) · [Workflow in italiano](docs/WORKFLOW.it.md) · [Translations](docs/TRANSLATING.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Publishing to GitHub](docs/PUBLISHING.md)
+[Guida completa in italiano](docs/README.it.md) · [Workflow](docs/WORKFLOW.md) · [Workflow in italiano](docs/WORKFLOW.it.md) · [20 workflow improvements (Italian)](docs/WORKFLOW-IMPROVEMENTS.it.md) · [Translations](docs/TRANSLATING.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Publishing to GitHub](docs/PUBLISHING.md)
 
 ## Features
 
 - Preview PEM, CRT, CER and DER imports, including bundles: inspect CN, SANs, issuer, validity, fingerprints, duplicates and possible renewals before saving.
-- Import an inventory of up to 100 HTTPS endpoints and their contacts from CSV, with URL checks and explicit import of the retrieved certificates.
+- Import up to 100 HTTPS endpoints and contacts from CSV: map columns, correct and select rows, review changes, then approve a persistent background batch with atomic saving for each row and downloadable reports.
 - Reconstruct Root CA and intermediate CA chains, highlight missing issuers and add the available CA files to complete the registry.
 - Combine text search with status, expiry within **45, 30, 15 or 2 days**, Root CA, intermediate CA and both contact-role filters.
-- Maintain a central directory of people and groups; assign them to multiple certificates as business or technical contacts and propagate directory changes.
-- Plan request, renewal and installation dates with a responsible person and notes, independently of X.509 validity dates.
+- Maintain a central directory of people and groups, preview the impact of shared changes, and propagate their contact assignments.
+- Plan request, renewal and installation dates in a renewal agenda with overdue filters, responsible people and access to all cases, independently of X.509 validity dates.
 - Track renewal cases from request to verified installation. Keep multiple valid certificates for the same CN, identified by SHA-256 fingerprint, throughout deployment.
-- Configure reminder thresholds per certificate, retaining 45/30/15/2 days and expiry as defaults, and optionally escalate to another recipient after the first reminder.
-- Inspect live certificates from HTTPS URLs or hostnames and monitor up to 100 endpoints. Opt into email alerts for service anomalies and recovery, with event deduplication.
-- Distribute the signed public certificate and available chain to technical contacts, then verify installation separately for each endpoint before retiring the predecessor.
+- Simulate reminder thresholds and escalation without sending messages; save reusable policy templates and review bulk changes with explicit exceptions.
+- Inspect live certificates and monitor up to 100 endpoints. Claim anomalies, plan maintenance windows, confirm transient reachability failures and investigate unexpected certificate changes.
+- Compare renewals, review each technical recipient’s SMTP delivery state, and use a server-backed deployment checklist before closing a case. Download the captured closure evidence and workflow history.
 - Configure SMTP in the interface, test TLS and authentication without sending messages, inspect `.eml` previews, and pause or enable delivery.
-- Use nine web pages in **English, Italian, French, Spanish, Simplified Chinese or Japanese**.
+- Use ten web pages in **English, Italian, French, Spanish, Simplified Chinese or Japanese**.
 
 This is a local application. The HTTP server binds to **127.0.0.1** by default; Docker Compose publishes it only on the host’s loopback address. It has no user authentication or access roles. Publishing the source on GitHub does not make it a hosted service. See [Security](SECURITY.md) before considering network exposure.
 
@@ -150,7 +150,8 @@ Keep this archive private. When restoring it, preserve ownership `10001:10001` a
 | --- | --- | --- |
 | Overview | `/` | Counts, upcoming expiry dates and service alerts. |
 | Certificates | `/certificati` | Registry, combined filters, contacts and renewals. |
-| Monitored services | `/servizi` | Endpoint configuration, results and monitoring events. |
+| Monitored services | `/servizi` | Endpoint configuration, results, incidents, maintenance and monitoring events. |
+| Renewals | `/rinnovi` | Operational agenda with status, responsible person and overdue filters. |
 | Import certificates | `/importa` | Preview certificate files or check and import a CSV endpoint inventory. |
 | Verify endpoint | `/verifica` | Retrieve and compare the certificate presented by a service. |
 | Reminders | `/promemoria` | Expiry reminders and optional desktop notifications. |
@@ -173,7 +174,11 @@ url,business_name,business_email,technical_name,technical_email
 https://service.example.test,Service owner,owner@example.test,Operations,ops@example.test
 ```
 
-Separate multiple names and email addresses within a contact cell using semicolons, in matching order. Standard CSV quoting is supported. Validate the inventory, check its URLs, inspect results and then choose the import action. The browser processes rows sequentially and must remain open. Each import refreshes the certificate acquisition and rejects an unexpected fingerprint change since the preview. Successful rows are retained if another row fails; correct the reported error and retry. Existing assignments are merged by role and email.
+Separate multiple names and email addresses within a contact cell using semicolons, in matching order. Standard CSV quoting is supported. Choose comma, semicolon or tab as the file separator and explicitly map other column names to the five supported fields. Validate to see source line numbers and all row errors. Correct a row in the preview, select the valid subset, and download corrected input or an outcome report.
+
+**Check URLs** saves a persistent batch and builds its change plan in a backend worker. Review the proposed certificate, CA information, validity dates, monitor and contact changes. Shared email addresses with different names require an explicit keep/update decision. Approve the selected ready rows to start importing. A row commits its certificates, monitor, directory contacts, role assignments, audit and idempotency receipt together; any failure rolls that row back. Earlier successful rows remain saved.
+
+The worker reacquires each certificate before saving, checks the reviewed fingerprint and refuses incompatible registry changes until another review. Batches survive browser closure and process restarts; they continue while `serve` or `watch` is running. Open saved batches to review, pause, replan or download outcomes and rows needing correction. Previewing a plan never authorizes automatic import.
 
 ## Expiry, contacts and renewals
 
@@ -181,7 +186,11 @@ Default reminders are **45, 30, 15 and 2 days before expiry**, plus expiry itsel
 
 Optionally configure an escalation recipient and a delay of **0 to 365 days from the first recorded reminder**. Escalation is deduplicated per certificate and recipient while the certificate remains active. Loading a renewal does not stop the predecessor's reminders or escalation; verified completion or explicit retirement does.
 
+Before changing a shared directory entry, review its affected certificates, pending messages and monitor recipients. For edits it also shows proposed names, email and memberships with their affected certificates. It is not an authenticated approval workflow.
+
 Business contacts receive expiry emails; technical contacts receive the signed public certificate and available chain as a PEM attachment. Assign a person to both roles for both message types. **Directory** (`/rubrica`) stores reusable people and groups. Assignments can cover several certificates; updating a directory email or group membership propagates to those assignments. Removing a recipient cancels their relevant pending or failed messages, preserving sent history.
+
+The **Renewals** page (`/rinnovi`) gathers cases into an agenda with status, responsible person and overdue filters. A certificate’s detail lets you choose all its open and closed cases. Compare the previous and replacement certificates, including SANs, CA chain, dates, fingerprint and key/signature algorithms, before linking.
 
 A certificate's renewal case records request, planned renewal and planned installation dates, a responsible person and notes. These operational dates do not modify `notBefore` or `notAfter`. Case stages are **Requested → Awaiting CA → Signed → Delivered → Installing → Verified**; the workflow also has a distinct **Retired** outcome for explicit manual retirement. Advancing a descriptive stage does not issue a certificate, send an email or prove installation.
 
@@ -189,9 +198,13 @@ Obtain the signed renewal from your CA, then upload it through the predecessor's
 
 **Multiple certificates for the same CN can remain valid together.** Their SHA-256 fingerprints identify separate records. Loading or linking a renewal keeps the predecessor active, preserves its queued reminders and leaves its monitors in place. Operational labels **In use**, **Ready**, **Deploying** and **Retired** are independent of X.509 time validity.
 
+The checklist explains every closing blocker per endpoint: paused service, missing or stale request/proof, failed TLS, wrong fingerprint, changed association or duplicate target. It uses the same server conditions as the completion action; refreshing the checklist does not itself request a TLS probe.
+
 After installation, request verification for one endpoint or all endpoints from the renewal case. An earlier automatic observation cannot substitute for this request. Completion requires every associated endpoint to present the new fingerprint with successful TLS verification after the request, with both request and result within the last **15 minutes**. Paused endpoints must be reactivated. Only completion transfers the verified monitors and archives a predecessor with no remaining monitor associations. If there are no endpoints, verified completion is unavailable: manual retirement requires a responsible person, an explicit note and no remaining monitor associations, and records **Retired**, not **Verified**.
 
 The expiry filter includes certificates that are already valid and expire within the selected duration; it excludes expired and not-yet-valid certificates. Limits are cumulative and combine with all other filters. “Valid from” represents X.509 `notBefore`, which is not necessarily the actual signing time.
+
+Each case includes technical-recipient delivery state and `.eml` downloads, with retry available for failed messages. SMTP acceptance is neither inbox delivery nor installation. The JSON case report contains current data and, after closure, the evidence captured before monitor transfer/retirement. That snapshot stays unchanged through later service observations; records may still be deleted with their case. Workflow history is local, without authenticated actors or tamper-proof storage.
 
 ## HTTPS checks and periodic monitoring
 
@@ -202,6 +215,10 @@ Verification resolves DNS, connects with TCP and negotiates TLS. It **does not r
 Inspect or download the result before explicitly adding it to the registry. The public acquisition is held in memory for 10 minutes, with at most eight recent acquisitions. Importing from an online check automatically prepares a 15-minute monitor for the same endpoint. Manual imports do not create monitors.
 
 Monitoring intervals range from 1 to 1440 minutes. Checks continue while `serve` or `watch` runs, even when the browser is closed. Repeated identical failures are deduplicated; certificate changes and recovery are recorded. Enable email alerts and select recipients per monitor to queue new anomaly and recovery events. Alerts are off by default; enabling them does not replay old events. Interface events and optional desktop notifications remain available.
+
+A monitor may require **1–10 consecutive reachability failures** before queuing an anomaly email; the default is one. Technical observations remain visible immediately. TLS errors and unexpected fingerprints do not wait for that reachability threshold. Maintenance suppresses new anomaly/recovery email while preserving checks and events; its end requests a fresh check. A paused monitor still needs reactivation. In **Monitored services**, assign a responsible person, note, due date and open/investigating/resolved handling status to an event. Those administrative states never change the actual technical result.
+
+An unexpected-certificate event links to fresh endpoint acquisition and comparison. Review and explicitly import the acquired certificate; link it as a renewal only if compatible. No event automatically changes the approved fingerprint.
 
 During renewal, a monitor recognizes the original fingerprint and valid replacements explicitly linked in a signed, delivered or installing case. All still require successful TLS trust, hostname and validity checks. An unrelated certificate remains an unexpected change; monitoring never approves or imports it automatically.
 
@@ -243,7 +260,7 @@ Place `--db PATH` before the command. `watch` checks expiry, delivery and config
 
 ## Data and backups
 
-The database contains public certificates, metadata, contact details, reminders, monitor history, the email queue and SMTP settings. It never stores TLS private keys. Uploads reject private keys, PKCS#12/PFX files and unrelated data; the per-file limit is 16 MiB. Duplicates are identified by SHA-256 fingerprint. Existing databases are migrated automatically to schema version **5**, adding renewal cases, endpoint verification records, the directory, reminder policies and monitor email recipients. Previously archived renewal history remains archived and is recorded as manual/historical retirement rather than claiming verified installation.
+The database contains public certificates, metadata, contact details, reminders, monitor history, the email queue and SMTP settings. It never stores TLS private keys. Uploads reject private keys, PKCS#12/PFX files and unrelated data; the per-file limit is 16 MiB. Duplicates are identified by SHA-256 fingerprint. Existing databases are migrated automatically to schema version **6**, retaining earlier renewal/directory/policy data and adding persistent inventory batches, row receipts, policy templates, incident options/claims, closure evidence and workflow audit records. New audit records start with this migration; older actions are not reconstructed. Previously archived renewal history remains archived and is recorded as manual/historical retirement rather than claiming verified installation.
 
 Stop every application process using a database before copying it. Back up its `.smtp.key` sidecar if present, keep both files private, and make a backup before upgrading. Do not commit databases, SMTP keys, environment files or real service credentials. The repository ignores these artifacts; tests create temporary certificates and databases instead of using production material.
 
@@ -253,7 +270,7 @@ Stop every application process using a database before copying it. Back up its `
 make test
 ```
 
-The suite covers certificate parsing, chain reconstruction, reminders, directory/group propagation, custom reminder and escalation policies, overlapping renewals, fresh endpoint verification, monitor email alerts, queue behavior, encrypted SMTP settings, migrations, HTTP/CSRF checks, the nine web pages, endpoint verification and background monitoring. Network tests use local TLS/SMTP peers and temporary certificates; they do not require a real SMTP account or contact public HTTPS sites. Node.js is used for interface checks.
+The suite covers certificate parsing, chain reconstruction, reminders, directory/group propagation, custom reminder and escalation policies, overlapping renewals, fresh endpoint verification, monitor email alerts, queue behavior, encrypted SMTP settings, migrations, HTTP/CSRF checks, the ten web pages, endpoint verification and background monitoring. Network tests use local TLS/SMTP peers and temporary certificates; they do not require a real SMTP account or contact public HTTPS sites. Additional suites cover CSV mapping/validation, atomic rollback and review conflicts, durable batches, reminder simulation/templates, the shared closing checklist, immutable closure snapshots, incident claims, maintenance and failure thresholds. Node.js is used for interface checks.
 
 The [GitHub Actions workflow](.github/workflows/ci.yml) builds and tests on Ubuntu on each push and pull request. It uses the official [checkout](https://github.com/actions/checkout) and [setup-node](https://github.com/actions/setup-node) actions. See [Contributing](CONTRIBUTING.md) for source layout and [Publishing to GitHub](docs/PUBLISHING.md) for publication steps.
 

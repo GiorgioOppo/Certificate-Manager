@@ -2,6 +2,7 @@
 #include "app.h"
 #include "delivery.h"
 #include "monitor.h"
+#include "inventory.h"
 #include <errno.h>
 #include <inttypes.h>
 #include <stdlib.h>
@@ -187,6 +188,8 @@ int main(int argc, char **argv) {
             }
             if (watching) {
                 char monitor_error[512] = "";
+                if (!inventory_tick(&store, now, monitor_error, sizeof monitor_error))
+                    fprintf(stderr, "Inventario: %s\n", monitor_error);
                 if (!monitor_tick(&store, now, monitor_error, sizeof monitor_error))
                     fprintf(stderr, "Monitoraggio URL: %s\n", monitor_error);
                 struct timespec rest = { 1, 0 };
@@ -196,6 +199,7 @@ int main(int argc, char **argv) {
     }
     if (!ok && error[0]) fprintf(stderr, "%s\n", error);
     monitor_shutdown();
+    inventory_shutdown();
     store_close(&store);
     return ok ? 0 : 1;
 }

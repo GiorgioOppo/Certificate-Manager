@@ -7,6 +7,10 @@
 #include "lifecycle.h"
 #include "smtp_settings.h"
 #include "remote_service.h"
+#include "inventory.h"
+#include "operations.h"
+#include "incident.h"
+#include "workflow_support.h"
 #include "assets.h"
 #include <arpa/inet.h>
 #include <ctype.h>
@@ -54,6 +58,7 @@ static void response_extended(int fd, int code, const char *type, const void *bo
         case 404: reason = "Not Found"; break;
         case 405: reason = "Method Not Allowed"; break;
         case 408: reason = "Request Timeout"; break;
+        case 409: reason = "Conflict"; break;
         case 413: reason = "Content Too Large"; break;
         case 431: reason = "Request Header Fields Too Large"; break;
         case 500: reason = "Internal Server Error"; break;
@@ -492,12 +497,13 @@ static void save_monitor(int fd, Store *store, const Request *r, int64_t id) {
         snprintf(error, sizeof error, "Certificato, intervallo (1–1440 minuti) o stato del monitoraggio non valido."); ok = 0;
     }
     if(ok&&mail_enabled&&!form_number(mail_enabled,0,1,&mail_active)){snprintf(error,sizeof error,"Configurazione email monitor non valida.");ok=0;}
+    int outer=sqlite3_get_autocommit(store->db);
     int transaction=ok&&store_exec(store,"SAVEPOINT monitor_configuration",error,sizeof error);
     if(ok&&!transaction)ok=0;
     if (ok) ok = monitor_save(store, id, certificate_id, target, (int)(minutes * 60), (int)active,
                               (int64_t)time(NULL), &saved_id, error, sizeof error);
     if(ok&&(mail_enabled||recipients))ok=workspace_monitor_mail(store,saved_id,(int)mail_active,recipients?recipients:"",error,sizeof error);
-    if(transaction){if(ok)ok=store_exec(store,"RELEASE monitor_configuration",error,sizeof error);if(!ok)sqlite3_exec(store->db,"ROLLBACK TO monitor_configuration; RELEASE monitor_configuration",NULL,NULL,NULL);}
+    if(transaction){if(ok)ok=store_exec(store,"RELEASE monitor_configuration",error,sizeof error);if(!ok)sqlite3_exec(store->db,outer?"ROLLBACK":"ROLLBACK TO monitor_configuration; RELEASE monitor_configuration",NULL,NULL,NULL);}
     free(cert); free(target); free(interval); free(enabled);free(mail_enabled);free(recipients);
     if (!ok) { json_error(fd, 400, error); return; }
     char body[96];
@@ -693,6 +699,7 @@ static void policy_form(int fd,Store *s,const Request *r,int64_t id){
 }
 static void renewal_form(int fd,Store *s,const Request *r,int64_t id,const char *action){
     char error[512]="";int ok=0,queued=0;int64_t saved=id;
+    int outer=sqlite3_get_autocommit(s->db);
     if(!store_exec(s,"SAVEPOINT renewal_configuration",error,sizeof error)){json_error(fd,500,error);return;}
     if(*action){
         if(!strcmp(action,"/check-install")){char *value=NULL;int64_t monitor_id=0;ok=single_form_value(r,"monitor_id",&value,0,error,sizeof error)&&(!value||!*value||form_number(value,0,INT64_MAX,&monitor_id));free(value);if(ok)ok=lifecycle_request_install(s,id,monitor_id,error,sizeof error);}
@@ -707,7 +714,7 @@ static void renewal_form(int fd,Store *s,const Request *r,int64_t id,const char 
         for(size_t i=0;i<8;i++)free(v[i]);
     }
     if(ok)ok=store_exec(s,"RELEASE renewal_configuration",error,sizeof error);
-    if(!ok){sqlite3_exec(s->db,"ROLLBACK TO renewal_configuration; RELEASE renewal_configuration",NULL,NULL,NULL);json_error(fd,400,error[0]?error:"Pratica di rinnovo non valida.");return;}
+    if(!ok){sqlite3_exec(s->db,outer?"ROLLBACK":"ROLLBACK TO renewal_configuration; RELEASE renewal_configuration",NULL,NULL,NULL);json_error(fd,400,error[0]?error:"Pratica di rinnovo non valida.");return;}
     char body[160];int length=snprintf(body,sizeof body,"{\"ok\":true,\"job_id\":%"PRId64",\"queued\":%d}",saved,queued);response(fd,200,"application/json; charset=utf-8",body,(size_t)length);
 }
 
@@ -727,6 +734,7 @@ static int serve_ui_page(int fd, const char *target) {
         { "/email", asset_delivery_html, asset_delivery_html_size },
         { "/workflow", asset_workflow_html, asset_workflow_html_size },
         { "/rubrica", asset_directory_html, asset_directory_html_size }
+        ,{ "/rinnovi", asset_renewals_html, asset_renewals_html_size }
     };
     size_t length = strcspn(target, "?");
     if (length > 1 && target[length - 1] == '/' && target[length - 2] != '/') length--;
@@ -740,6 +748,20 @@ static int serve_ui_page(int fd, const char *target) {
 }
 
 static void route(int fd, Store *store, const Request *r, const char *token) {
+    if (!strncmp(r->target,"/api/inventory/",15) || !strncmp(r->target,"/api/operations/",16) || !strncmp(r->target,"/api/incidents/",15)) {
+        char error[512]="";size_t length=0;int status=400;char *body=NULL;
+        if(strcmp(r->method,"GET") && (strncmp(r->content_type,"application/x-www-form-urlencoded",33) || (r->content_type[33] && r->content_type[33]!=';'))) {json_error(fd,400,"Formato della richiesta non valido.");return;}
+        if(!strncmp(r->target,"/api/inventory/",15))body=inventory_api(store,r->method,r->target,r->body,r->length,&length,&status,error,sizeof error);
+        else if(!strncmp(r->target,"/api/operations/",16))body=operations_api(store,r->method,r->target,r->body,r->length,&length,&status,error,sizeof error);
+        else body=incident_api(store,r->method,r->target,r->body,r->length,&length,&status,error,sizeof error);
+        if(body){response(fd,status,"application/json; charset=utf-8",body,length);free(body);}else json_error(fd,status,error[0]?error:"Richiesta non valida.");return;
+    }
+    if(!strcmp(r->target,"/api/audit") && !strcmp(r->method,"GET")) {
+        char *body=NULL,error[512]="";size_t length=0;FILE *out=open_memstream(&body,&length);
+        if(!out){json_error(fd,500,"Memoria insufficiente.");return;}
+        int ok=wf_json_rows(store,out,"SELECT * FROM workflow_audit ORDER BY id DESC LIMIT 500",0,error,sizeof error);if(fclose(out))ok=0;
+        if(ok)response(fd,200,"application/json; charset=utf-8",body,length);else json_error(fd,500,error);free(body);return;
+    }
     int64_t certificate_id = 0, outbox_id = 0, monitor_id = 0, event_id = 0;
     int64_t person_id=0,group_id=0,job_id=0; const char *person_action="",*group_action="",*job_action="";
     int person_path=resource_path(r->target,"/api/people/",&person_id,&person_action);
@@ -758,6 +780,12 @@ static void route(int fd, Store *store, const Request *r, const char *token) {
             response(fd, 200, "text/css; charset=utf-8", asset_app_css, asset_app_css_size);
         else if (!strcmp(r->target, "/app.js"))
             response(fd, 200, "text/javascript; charset=utf-8", asset_app_js, asset_app_js_size);
+        else if (!strcmp(r->target, "/extensions.js"))
+            response(fd, 200, "text/javascript; charset=utf-8", asset_extensions_js, asset_extensions_js_size);
+        else if (!strcmp(r->target, "/operations-ui.js"))
+            response(fd, 200, "text/javascript; charset=utf-8", asset_operations_ui_js, asset_operations_ui_js_size);
+        else if (!strcmp(r->target, "/incidents-ui.js"))
+            response(fd, 200, "text/javascript; charset=utf-8", asset_incidents_ui_js, asset_incidents_ui_js_size);
         else if (!strcmp(r->target, "/i18n.js"))
             response(fd, 200, "text/javascript; charset=utf-8", asset_i18n_js, asset_i18n_js_size);
         else if (!strcmp(r->target, "/i18n-catalogs.js"))
@@ -912,6 +940,8 @@ int app_serve(Store *store, const char *bind_address, unsigned short port) {
     int success = 1;
     while (app_running) {
         char monitor_error[512] = "";
+        if (!incident_tick(store,(int64_t)time(NULL),monitor_error,sizeof monitor_error))fprintf(stderr,"Manutenzione: %s\n",monitor_error);
+        if (!inventory_tick(store,(int64_t)time(NULL),monitor_error,sizeof monitor_error))fprintf(stderr,"Inventario: %s\n",monitor_error);
         if (!monitor_tick(store, (int64_t)time(NULL), monitor_error, sizeof monitor_error))
             fprintf(stderr, "Monitoraggio URL: %s\n", monitor_error);
         int64_t tick = monotonic_ms();
@@ -944,6 +974,7 @@ int app_serve(Store *store, const char *bind_address, unsigned short port) {
     }
     close(fd);
     monitor_shutdown();
+    inventory_shutdown();
     remote_cache_clear();
     return success;
 }

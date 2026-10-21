@@ -26,9 +26,9 @@ static int statement(Store *s,const char *sql,int64_t id,char *err,size_t n) {
     if(!ok) failure(s,err,n);
     sqlite3_finalize(q);return ok;
 }
-static int finish(Store *s,int ok,char *err,size_t n) {
+static int finish(Store *s,int ok,int outer,char *err,size_t n) {
     if(ok) ok=store_exec(s,"RELEASE workspace",err,n);
-    if(!ok) sqlite3_exec(s->db,"ROLLBACK TO workspace; RELEASE workspace",NULL,NULL,NULL);
+    if(!ok) sqlite3_exec(s->db,outer?"ROLLBACK":"ROLLBACK TO workspace; RELEASE workspace",NULL,NULL,NULL);
     return ok;
 }
 static int exists(Store *s,const char *table,int64_t id) {
@@ -80,6 +80,7 @@ static int memberships(Store *s,const char *sql,int64_t id,const int64_t *member
 int workspace_save_person(Store *s,int64_t id,const char *name,const char *email,const int64_t *groups,size_t count,int64_t *saved,char *err,size_t n) {
     if(!text_valid(name,120)||!store_email_valid(email)||count>1000) {snprintf(err,n,"Nome o indirizzo email della persona non valido.");return 0;}
     if(id && !exists(s,"directory_people",id)) {snprintf(err,n,"Persona non trovata.");return 0;}
+    int outer=sqlite3_get_autocommit(s->db);
     if(!store_exec(s,"SAVEPOINT workspace",err,n)) return 0;
     sqlite3_stmt *q=NULL;char *old=NULL;
     if(id && sqlite3_prepare_v2(s->db,"SELECT email FROM directory_people WHERE id=?1",-1,&q,NULL)==SQLITE_OK && sqlite3_bind_int64(q,1,id)==SQLITE_OK && sqlite3_step(q)==SQLITE_ROW) old=strdup((const char *)sqlite3_column_text(q,0));
@@ -100,11 +101,12 @@ int workspace_save_person(Store *s,int64_t id,const char *name,const char *email
     }
     free(old);
     if(ok) ok=statement(s,"DELETE FROM directory_memberships WHERE person_id=?1",id,err,n) && memberships(s,"INSERT OR IGNORE INTO directory_memberships(person_id,group_id) VALUES(?1,?2)",id,groups,count,"directory_groups",err,n) && materialize(s,err,n);
-    ok=finish(s,ok,err,n);if(ok)*saved=id;return ok;
+    ok=finish(s,ok,outer,err,n);if(ok)*saved=id;return ok;
 }
 int workspace_save_group(Store *s,int64_t id,const char *name,const int64_t *people,size_t count,int64_t *saved,char *err,size_t n) {
     if(!text_valid(name,120)||!*name||count>1000) {snprintf(err,n,"Nome del gruppo non valido.");return 0;}
     if(id&&!exists(s,"directory_groups",id)) {snprintf(err,n,"Gruppo non trovato.");return 0;}
+    int outer=sqlite3_get_autocommit(s->db);
     if(!store_exec(s,"SAVEPOINT workspace",err,n)) return 0;
     sqlite3_stmt *q=NULL;
     int ok=sqlite3_prepare_v2(s->db,id?"UPDATE directory_groups SET name=?1 WHERE id=?2":"INSERT INTO directory_groups(name) VALUES(?1)",-1,&q,NULL)==SQLITE_OK && sqlite3_bind_text(q,1,name,-1,SQLITE_TRANSIENT)==SQLITE_OK;
@@ -114,22 +116,25 @@ int workspace_save_group(Store *s,int64_t id,const char *name,const int64_t *peo
     sqlite3_finalize(q);
     if(ok&&!id)id=sqlite3_last_insert_rowid(s->db);
     if(ok)ok=statement(s,"DELETE FROM directory_memberships WHERE group_id=?1",id,err,n)&&memberships(s,"INSERT OR IGNORE INTO directory_memberships(group_id,person_id) VALUES(?1,?2)",id,people,count,"directory_people",err,n)&&materialize(s,err,n);
-    ok=finish(s,ok,err,n);if(ok)*saved=id;return ok;
+    ok=finish(s,ok,outer,err,n);if(ok)*saved=id;return ok;
 }
 int workspace_remove_person(Store *s,int64_t id,char *err,size_t n) {
     if(!exists(s,"directory_people",id)){snprintf(err,n,"Persona non trovata.");return 0;}
+    int outer=sqlite3_get_autocommit(s->db);
     if(!store_exec(s,"SAVEPOINT workspace",err,n))return 0;
     int ok=statement(s,"DELETE FROM monitor_recipients WHERE email IN(SELECT email FROM directory_people WHERE id=?1)",id,err,n)&&statement(s,"UPDATE reminder_policies SET escalation_email='' WHERE escalation_email COLLATE NOCASE IN(SELECT email FROM directory_people WHERE id=?1)",id,err,n)&&statement(s,"DELETE FROM outbox WHERE status IN('pending','failed') AND recipient_email COLLATE NOCASE IN(SELECT email FROM directory_people WHERE id=?1)",id,err,n)&&statement(s,"DELETE FROM directory_people WHERE id=?1",id,err,n)&&materialize(s,err,n);
-    return finish(s,ok,err,n);
+    return finish(s,ok,outer,err,n);
 }
 int workspace_remove_group(Store *s,int64_t id,char *err,size_t n) {
     if(!exists(s,"directory_groups",id)){snprintf(err,n,"Gruppo non trovato.");return 0;}
+    int outer=sqlite3_get_autocommit(s->db);
     if(!store_exec(s,"SAVEPOINT workspace",err,n))return 0;
     int ok=statement(s,"DELETE FROM directory_groups WHERE id=?1",id,err,n)&&materialize(s,err,n);
-    return finish(s,ok,err,n);
+    return finish(s,ok,outer,err,n);
 }
 int workspace_assign(Store *s,int64_t id,const char *role,const int64_t *people,size_t pc,const int64_t *groups,size_t gc,char *err,size_t n) {
     if(!role||(strcmp(role,"business")&&strcmp(role,"technical"))||pc>1000||gc>1000||!exists(s,"certificates",id)){snprintf(err,n,"Assegnazione non valida.");return 0;}
+    int outer=sqlite3_get_autocommit(s->db);
     if(!store_exec(s,"SAVEPOINT workspace",err,n))return 0;
     sqlite3_stmt *q=NULL;int ok=1;
     for(int type=0;type<2&&ok;type++){
@@ -145,7 +150,7 @@ int workspace_assign(Store *s,int64_t id,const char *role,const int64_t *people,
         sqlite3_finalize(q);q=NULL;
     }
     if(ok) ok=materialize(s,err,n);
-    return finish(s,ok,err,n);
+    return finish(s,ok,outer,err,n);
 }
 int workspace_save_policy(Store *s,int64_t id,const char *thresholds,int enabled,const char *email,const char *name,int days,char *err,size_t n){
     if(!thresholds||strlen(thresholds)>200||!text_valid(name,120)||(*email&&!store_email_valid(email))||days<0||days>365||(enabled!=0&&enabled!=1)||!exists(s,"certificates",id)){snprintf(err,n,"Regola promemoria non valida.");return 0;}
@@ -154,10 +159,11 @@ int workspace_save_policy(Store *s,int64_t id,const char *thresholds,int enabled
     free(copy);if(!ok||!count||!zero){snprintf(err,n,"Soglie: numeri distinti tra 0 e 3650, separati da virgola; includi 0.");return 0;}
     for(int i=0;i<count;i++)for(int j=i+1;j<count;j++)if(values[j]>values[i]){int v=values[i];values[i]=values[j];values[j]=v;}
     char canonical[256]="";size_t pos=0;for(int i=0;i<count;i++)pos+=(size_t)snprintf(canonical+pos,sizeof canonical-pos,"%s%d",i?",":"",values[i]);
+    int outer=sqlite3_get_autocommit(s->db);
     if(!store_exec(s,"SAVEPOINT workspace",err,n))return 0;
     sqlite3_stmt *q=NULL;ok=sqlite3_prepare_v2(s->db,"INSERT INTO reminder_policies(certificate_id,thresholds,enabled,escalation_email,escalation_name,escalation_after_days) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(certificate_id) DO UPDATE SET thresholds=excluded.thresholds,enabled=excluded.enabled,escalation_email=excluded.escalation_email,escalation_name=excluded.escalation_name,escalation_after_days=excluded.escalation_after_days",-1,&q,NULL)==SQLITE_OK&&sqlite3_bind_int64(q,1,id)==SQLITE_OK&&sqlite3_bind_text(q,2,canonical,-1,SQLITE_TRANSIENT)==SQLITE_OK&&sqlite3_bind_int(q,3,enabled)==SQLITE_OK&&sqlite3_bind_text(q,4,email,-1,SQLITE_TRANSIENT)==SQLITE_OK&&sqlite3_bind_text(q,5,name,-1,SQLITE_TRANSIENT)==SQLITE_OK&&sqlite3_bind_int(q,6,days)==SQLITE_OK&&sqlite3_step(q)==SQLITE_DONE;
     if(!ok) failure(s,err,n);
-    sqlite3_finalize(q);return finish(s,ok,err,n);
+    sqlite3_finalize(q);return finish(s,ok,outer,err,n);
 }
 int workspace_monitor_mail(Store *s,int64_t id,int enabled,const char *recipients,char *err,size_t n){
     if(!recipients||strlen(recipients)>16000||(enabled!=0&&enabled!=1)){snprintf(err,n,"Destinatari monitor non validi.");return 0;}
@@ -165,6 +171,7 @@ int workspace_monitor_mail(Store *s,int64_t id,int enabled,const char *recipient
     for(char *p=strtok_r(copy,";,\r\n",&save);p;p=strtok_r(NULL,";,\r\n",&save)){while(isspace((unsigned char)*p))p++;char *end=p+strlen(p);while(end>p&&isspace((unsigned char)end[-1]))*--end=0;if(!*p)continue;if(count==100||!store_email_valid(p)){ok=0;break;}addresses[count++]=p;}
     if(enabled&&!count)ok=0;
     if(!ok){free(copy);snprintf(err,n,"Inserisci almeno un indirizzo email valido per gli avvisi del monitor.");return 0;}
+    int outer=sqlite3_get_autocommit(s->db);
     if(!store_exec(s,"SAVEPOINT workspace",err,n)){free(copy);return 0;}
     sqlite3_stmt *q=NULL;ok=sqlite3_prepare_v2(s->db,"UPDATE monitors SET email_alerts=?1 WHERE id=?2",-1,&q,NULL)==SQLITE_OK&&sqlite3_bind_int(q,1,enabled)==SQLITE_OK&&sqlite3_bind_int64(q,2,id)==SQLITE_OK&&sqlite3_step(q)==SQLITE_DONE;
     if(!ok) failure(s,err,n);
@@ -173,7 +180,7 @@ int workspace_monitor_mail(Store *s,int64_t id,int enabled,const char *recipient
     if(ok)ok=sqlite3_prepare_v2(s->db,"INSERT OR IGNORE INTO monitor_recipients(monitor_id,name,email) VALUES(?1,'',?2)",-1,&q,NULL)==SQLITE_OK;
     for(size_t i=0;i<count&&ok;i++){sqlite3_reset(q);sqlite3_clear_bindings(q);ok=sqlite3_bind_int64(q,1,id)==SQLITE_OK&&sqlite3_bind_text(q,2,addresses[i],-1,SQLITE_TRANSIENT)==SQLITE_OK&&sqlite3_step(q)==SQLITE_DONE;}
     if(!ok) failure(s,err,n);
-    sqlite3_finalize(q);free(copy);return finish(s,ok,err,n);
+    sqlite3_finalize(q);free(copy);return finish(s,ok,outer,err,n);
 }
 static int emit_rows(Store *s,FILE *out,const char *sql,char *err,size_t n){
     sqlite3_stmt *q=NULL;if(sqlite3_prepare_v2(s->db,sql,-1,&q,NULL)!=SQLITE_OK)return failure(s,err,n);fputc('[',out);int first=1,rc;

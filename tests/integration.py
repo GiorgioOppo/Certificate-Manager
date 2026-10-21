@@ -33,6 +33,20 @@ def command(*args):
     return result.stdout
 
 
+def remove_workflow_v6(connection):
+    """Remove v6 additions before reconstructing an actual historical schema."""
+    # Triggers on legacy tables reference workflow_audit. Remove them first so
+    # historical table rebuilds and inserts are valid without the v6 audit log.
+    triggers = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'audit_%'"
+    ).fetchall()
+    for (name,) in triggers:
+        connection.execute('DROP TRIGGER "' + name.replace('"', '""') + '"')
+    for table in ("inventory_rows", "inventory_batches", "inventory_commits", "event_claims",
+                  "monitor_options", "renewal_closure_reports", "policy_templates", "workflow_audit"):
+        connection.execute(f"DROP TABLE IF EXISTS {table}")
+
+
 class ApplicationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -315,7 +329,7 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(legacy["chain_status"], "legacy")
         self.assertFalse(legacy["pem_available"])
         self.assertEqual(len(state["notifications"]), 1)
-        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 5)
+        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 6)
         status, _, body = self.upload(self.leaf_old.read_bytes())
         self.assertEqual(status, 200, body)
         cert = self.state()["certificates"][0]
@@ -341,6 +355,7 @@ class ApplicationTests(unittest.TestCase):
         self.assertTrue(all(previous[table] for table in tables))
         # Remove later additions to recreate a populated, genuine v2 schema.
         with sqlite3.connect(self.db) as connection:
+            remove_workflow_v6(connection)
             for table in ("renewal_endpoints", "renewal_jobs", "reminder_policies", "monitor_recipients",
                           "certificate_groups", "directory_assignments", "directory_memberships",
                           "directory_groups", "directory_people"):
@@ -375,7 +390,7 @@ class ApplicationTests(unittest.TestCase):
             connection.execute("PRAGMA user_version=2")
         self.start_server()
         state = self.state()
-        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 5)
+        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 6)
         self.assertEqual(state["monitors"], [])
         self.assertEqual(state["monitor_events"], [])
         for table in tables:

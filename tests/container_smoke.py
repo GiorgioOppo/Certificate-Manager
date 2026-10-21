@@ -86,7 +86,7 @@ def main():
         require(any(mount["Type"] == "volume" and mount["Destination"] == "/data"
                     for mount in info["Mounts"]), "Persistent data volume missing")
         for route in ("/", "/certificati", "/servizi", "/importa", "/verifica",
-                      "/promemoria", "/email", "/workflow?lang=ja", "/rubrica?lang=zh-CN"):
+                      "/promemoria", "/email", "/rinnovi", "/workflow?lang=ja", "/rubrica?lang=zh-CN"):
             require(request("GET", route)[0] == 200, f"Web page unavailable: {route}")
         require(request("GET", "/api/state", headers={"Host": "untrusted.example.test"})[0] == 403,
                 "Host protection was weakened")
@@ -183,7 +183,7 @@ def main():
                 database_path.write_bytes(backup.extractfile(names["certificati.db"]).read())
                 connection = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
                 try:
-                    require(connection.execute("PRAGMA user_version").fetchone()[0] == 5,
+                    require(connection.execute("PRAGMA user_version").fetchone()[0] == 6,
                             "Container did not initialize the current database schema")
                     require(connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok",
                             "Backed-up database is inconsistent")

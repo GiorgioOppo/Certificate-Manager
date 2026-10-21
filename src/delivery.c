@@ -42,6 +42,15 @@
     "WHERE event.id=outbox.event_id AND monitor.email_alerts=1 " \
     "AND recipient.email=outbox.recipient_email COLLATE NOCASE))))"
 
+/* A temporary maintenance pause must not make cleanup_queue delete the mail.
+ * Recheck in both claim SELECT and CAS after a fresh post-maintenance probe. */
+#define MONITOR_DELIVERY_READY_SQL(clock_parameter) \
+    "(outbox.kind<>'monitor' OR NOT EXISTS(SELECT 1 FROM monitor_events event " \
+    "JOIN monitor_options options ON options.monitor_id=event.monitor_id " \
+    "WHERE event.id=outbox.event_id AND ((options.maintenance_start<=" clock_parameter \
+    " AND options.maintenance_end>" clock_parameter \
+    ") OR options.post_maintenance_check=1)))"
+
 typedef struct { char *name, *email; } Recipient;
 
 static int error_message(char *err, size_t n, const char *format, ...)
@@ -831,7 +840,7 @@ static int claim(Store *store, int64_t now, int64_t *id, int *attempt,
         sqlite3_stmt *stmt = NULL;
         const char *select = "SELECT id,attempts FROM outbox WHERE status IN('pending','failed') "
             "AND attempts<5 AND next_attempt<=?1 "
-            "AND " DELIVERY_ELIGIBLE_SQL("?1") " "
+            "AND " DELIVERY_ELIGIBLE_SQL("?1") " AND " MONITOR_DELIVERY_READY_SQL("?1") " "
             "ORDER BY id LIMIT 1";
         if (sqlite3_prepare_v2(store->db, select, -1, &stmt, NULL) != SQLITE_OK) return db_error(store, err, n);
         if (sqlite3_bind_int64(stmt, 1, now) != SQLITE_OK) { db_error(store, err, n); sqlite3_finalize(stmt); return 0; }
@@ -843,7 +852,7 @@ static int claim(Store *store, int64_t now, int64_t *id, int *attempt,
         sqlite3_finalize(stmt); stmt = NULL;
         const char *update = "UPDATE outbox SET status='sending',attempts=attempts+1,last_error='',next_attempt=? "
             "WHERE id=? AND status IN('pending','failed') AND attempts<5 AND next_attempt<=?3 AND attempts=?4 "
-            "AND " DELIVERY_ELIGIBLE_SQL("?3");
+            "AND " DELIVERY_ELIGIBLE_SQL("?3") " AND " MONITOR_DELIVERY_READY_SQL("?3");
         if (sqlite3_prepare_v2(store->db, update, -1, &stmt, NULL) != SQLITE_OK) return db_error(store, err, n);
         int ok = sqlite3_bind_int64(stmt, 1, now + CLAIM_LEASE) == SQLITE_OK &&
             sqlite3_bind_int64(stmt, 2, candidate) == SQLITE_OK &&

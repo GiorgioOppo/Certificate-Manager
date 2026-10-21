@@ -143,6 +143,31 @@ check('blank physical lines do not count toward the 100-record maximum', () => {
   assert.equal(rows[99].line, 201);
   assert.throws(() => parse('url\n' + Array(101).fill('example.com').join('\n')), /csv_limit/);
 });
+check('explicit mapping supports semicolon and quoted multi-contact cells', () => {
+  const text='Host;Owner;Email;Extra\r\nexample.com;"Anna;Marco";"a@example.test;b@example.test";ignored';
+  const rows=parse(text,{delimiter:';',mapping:['url','business_name','business_email','']});
+  assert.equal(rows[0].error,'');assert.deepEqual(rows[0].contacts.map(p=>p.name),['Anna','Marco']);
+  assert.deepEqual(parse(text,{delimiter:';',headersOnly:true}),['Host','Owner','Email','Extra']);
+});
+check('mapped duplicate targets remain invalid while explicit ignored columns are allowed', () => {
+  assert.throws(()=>parse('Host,Other\na,b',{mapping:['url','url']}),/csv_header/);
+  assert.equal(parse('Host,Ignored\nexample.com,a',{mapping:['url','']})[0].target,'example.com');
+  assert.throws(()=>parse('Host,Ignored\nexample.com,a',{mapping:['','']}),/csv_header/);
+});
+check('tab-delimited imports preserve original physical lines', () => {
+  const row=parse('\nHost\tEmail\r\nexample.com\ta@example.test',{delimiter:'\t',mapping:['url','technical_email']})[0];
+  assert.equal(row.line,3);assert.equal(row.contacts[0].role,'technical');assert.equal(row.error,'');
+});
+check('persisted batch outcomes match original physical lines despite URL normalization', () => {
+  const marker="    window.addEventListener('certificate-batch-update'";const start=source.indexOf(marker);assert.ok(start>0);const end=source.indexOf('\n',start);
+  let handler;const row={line:2,target:'EXAMPLE.test/path'};let rendered=0;
+  const runtime=new Function('window','row','renderInventory',`let inventoryBatchId=23,inventoryBatchData=null;const inventoryRows=[row];${source.slice(start,end)}`);
+  runtime({addEventListener:(event,callback)=>{handler=callback;}},row,()=>rendered++);
+  const plan={certificate:{fingerprint:'abc'}};
+  handler({detail:{id:23,rows:[{id:91,line:2,target:'https://example.test:443',status:'imported',plan,error:''}]}});
+  assert.equal(row.imported,true);assert.equal(row.batchRowId,91);assert.equal(row.plan,plan);assert.equal(rendered,1);
+  handler({detail:{id:24,rows:[{line:2,error:'unrelated'}]}});assert.equal(row.error,'');assert.equal(rendered,1);
+});
 console.log(`CSV inventory parser: ${checks} checks passed.`);
 
 // Exercise the actual file/input handlers and button renderer with controlled File.text promises.
@@ -151,6 +176,7 @@ class InventoryNode {
   append(...nodes) { for (const node of nodes) { node.parent = this; this.children.push(node); } }
   replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
   setAttribute(name, value) { this[name] = value; }
+  addEventListener() {}
   insertBefore(node, reference) {
     const index = reference ? this.children.indexOf(reference) : -1;
     node.parent = this;
@@ -174,6 +200,9 @@ function inventoryRuntime() {
   const create = new Function('on', 'byId', 'element', 'flow', 'parseInventoryCSV', `
     let inventoryRows = [], inventoryRunning = false, inventoryStopped = false;
     let inventoryReadGeneration = 0, inventoryReading = false, uploading = false;
+    let inventoryMapping=null, inventoryDelimiter=',', inventoryBatchId=null, inventoryBatchData=null;
+    const window={};
+    const action=(label,handler)=>element('button','',label);
     let requests = 0;
     const request = async () => { requests++; return { token: 'mock-token' }; };
     const refresh = async () => true;
@@ -184,7 +213,7 @@ function inventoryRuntime() {
     ${source.slice(fileStart, fileEnd)}
     return {
       preview: previewInventory, run: runInventory,
-      seed(rows) { inventoryRows = rows; renderInventory(); },
+      seed(rows) { inventoryRows = rows; inventoryBatchId=1;inventoryBatchData={status:'review',rows:[{status:'ready'}]};renderInventory(); },
       current() { return { rows: inventoryRows, reading: inventoryReading, requests }; }
     };
   `);

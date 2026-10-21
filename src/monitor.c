@@ -2,6 +2,7 @@
 #include "monitor.h"
 #include "delivery.h"
 #include "lifecycle.h"
+#include "incident.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -62,6 +63,17 @@ static int database_error(Store *store, char *err, size_t size)
 {
     error_text(err, size, sqlite3_errmsg(store->db));
     return 0;
+}
+
+static void rollback_savepoint(Store *store, const char *name, int outer)
+{
+    if (outer) {
+        (void)sqlite3_exec(store->db, "ROLLBACK", NULL, NULL, NULL);
+    } else {
+        char sql[160];
+        (void)snprintf(sql, sizeof sql, "ROLLBACK TO %s; RELEASE %s", name, name);
+        (void)sqlite3_exec(store->db, sql, NULL, NULL, NULL);
+    }
 }
 
 static int valid_store(Store *store, char *err, size_t size)
@@ -143,6 +155,7 @@ int monitor_save(Store *store, int64_t id, int64_t certificate_id,
     sqlite3_stmt *statement = NULL;
     int count;
     int ok = 0;
+    int outer = 0;
     int64_t result_id = id;
     error_text(err, errlen, "");
     if (saved_id != NULL) *saved_id = 0;
@@ -156,6 +169,7 @@ int monitor_save(Store *store, int64_t id, int64_t certificate_id,
     }
     if (!remote_normalize_target(target, &canonical, err, errlen))
         return 0;
+    outer = sqlite3_get_autocommit(store->db);
     if (!store_exec(store, "SAVEPOINT monitor_save", err, errlen))
         goto done;
     if (!scalar(store, "SELECT count(*) FROM certificates WHERE id=? AND is_ca=0 AND archived=0",
@@ -183,6 +197,23 @@ int monitor_save(Store *store, int64_t id, int64_t certificate_id,
             error_text(err, errlen, "Monitor non trovato.");
             goto failure;
         }
+        if (sqlite3_prepare_v2(store->db,
+            "DELETE FROM outbox WHERE kind='monitor' AND status IN('pending','failed') "
+            "AND event_id IN(SELECT id FROM monitor_events WHERE monitor_id=?1) "
+            "AND EXISTS(SELECT 1 FROM monitors WHERE id=?1 AND (certificate_id<>?2 OR target<>?3))",
+            -1, &statement, NULL) != SQLITE_OK ||
+            sqlite3_bind_int64(statement, 1, id) != SQLITE_OK ||
+            sqlite3_bind_int64(statement, 2, certificate_id) != SQLITE_OK || !bind_text(statement, 3, canonical) ||
+            sqlite3_step(statement) != SQLITE_DONE) goto database_failure;
+        sqlite3_finalize(statement); statement = NULL;
+        if (sqlite3_prepare_v2(store->db,
+            "UPDATE monitor_options SET consecutive_failures=0,incident_open=0,raw_event_id=NULL,last_alert_event_id=NULL "
+            "WHERE monitor_id=?1 AND EXISTS(SELECT 1 FROM monitors WHERE id=?1 AND (certificate_id<>?2 OR target<>?3))",
+            -1, &statement, NULL) != SQLITE_OK ||
+            sqlite3_bind_int64(statement, 1, id) != SQLITE_OK ||
+            sqlite3_bind_int64(statement, 2, certificate_id) != SQLITE_OK || !bind_text(statement, 3, canonical) ||
+            sqlite3_step(statement) != SQLITE_DONE) goto database_failure;
+        sqlite3_finalize(statement); statement = NULL;
         if (sqlite3_prepare_v2(store->db,
             "UPDATE monitors SET certificate_id=?1,target=?2,interval_seconds=?3,enabled=?4,"
             "revision=revision+1,next_check_at=?5,claim_until=0,updated_at=?5,"
@@ -227,7 +258,7 @@ database_failure:
 failure:
     sqlite3_finalize(statement);
     statement = NULL;
-    (void)store_exec(store, "ROLLBACK TO monitor_save; RELEASE monitor_save", NULL, 0);
+    rollback_savepoint(store, "monitor_save", outer);
 done:
     sqlite3_finalize(statement);
     free(canonical);
@@ -328,11 +359,11 @@ static int apply_result(Store *store, int64_t monitor_id, int64_t revision,
     char *previous_fingerprint = NULL;
     const char *observed = local_error ? "" : result_fingerprint(result);
     const char *status;
-    const char *kind = NULL;
     const char *detail;
     int interval;
     int approved = 0;
     int ok = 0;
+    int outer = 0;
     int rc;
     char message[2048];
     error_text(err, errlen, "");
@@ -341,6 +372,7 @@ static int apply_result(Store *store, int64_t monitor_id, int64_t revision,
         error_text(err, errlen, "Risultato del monitor non valido.");
         return 0;
     }
+    outer = sqlite3_get_autocommit(store->db);
     if (!store_exec(store, "SAVEPOINT monitor_result", err, errlen))
         return 0;
     if (sqlite3_prepare_v2(store->db,
@@ -406,13 +438,6 @@ static int apply_result(Store *store, int64_t monitor_id, int64_t revision,
         status = "ok";
         message[0] = '\0';
     }
-    if (strcmp(status, "ok") == 0) {
-        if (strcmp(previous_status, "pending") != 0 && strcmp(previous_status, "ok") != 0)
-            kind = "recovered";
-    } else if (strcmp(status, previous_status) != 0 ||
-               (observed[0] != '\0' && !fingerprint_equal(observed, previous_fingerprint))) {
-        kind = status;
-    }
     if (sqlite3_prepare_v2(store->db,
         "UPDATE monitors SET last_checked_at=?1,last_status=?2,last_error=?3,"
         "last_fingerprint=CASE WHEN ?4<>'' THEN ?4 ELSE last_fingerprint END,last_address=?5,"
@@ -434,22 +459,10 @@ static int apply_result(Store *store, int64_t monitor_id, int64_t revision,
      * request. Only fresh, fully verified observations can confirm a rollout. */
     if (!lifecycle_record_monitor(store, monitor_id, now, observed,
         !local_error && result->verified && !strcmp(status, "ok"), err, errlen)) goto failure;
-    if (kind != NULL) {
-        if (strcmp(kind, "recovered") == 0)
-            (void)snprintf(message, sizeof(message), "Il servizio %s e di nuovo raggiungibile e presenta il certificato registrato, verificato.", target);
-        if (sqlite3_prepare_v2(store->db,
-            "INSERT INTO monitor_events(monitor_id,kind,message,expected_fingerprint,observed_fingerprint,created_at) "
-            "VALUES(?1,?2,?3,?4,?5,?6)", -1, &statement, NULL) != SQLITE_OK ||
-            sqlite3_bind_int64(statement, 1, monitor_id) != SQLITE_OK || !bind_text(statement, 2, kind) ||
-            !bind_text(statement, 3, message) || !bind_text(statement, 4, expected) ||
-            !bind_text(statement, 5, observed) || sqlite3_bind_int64(statement, 6, now) != SQLITE_OK ||
-            sqlite3_step(statement) != SQLITE_DONE)
-            goto database_failure;
-        int64_t event_id = sqlite3_last_insert_rowid(store->db);
-        sqlite3_finalize(statement); statement = NULL;
-        int queued = 0;
-        if (!delivery_queue_monitor_event(store, event_id, now, &queued, err, errlen)) goto failure;
-    }
+    if (!strcmp(status, "ok"))
+        (void)snprintf(message, sizeof(message), "Il servizio %s e di nuovo raggiungibile e presenta il certificato registrato, verificato.", target);
+    if (!incident_record(store, monitor_id, now, status, previous_status,
+        expected, observed, previous_fingerprint, message, err, errlen)) goto failure;
     ok = store_exec(store, "RELEASE monitor_result", err, errlen);
     if (!ok) goto failure;
     goto done;
@@ -457,7 +470,7 @@ database_failure:
     (void)database_error(store, err, errlen);
 failure:
     sqlite3_finalize(statement); statement = NULL;
-    (void)store_exec(store, "ROLLBACK TO monitor_result; RELEASE monitor_result", NULL, 0);
+    rollback_savepoint(store, "monitor_result", outer);
 done:
     sqlite3_finalize(statement);
     free(target); free(expected); free(previous_status); free(previous_fingerprint);
@@ -582,6 +595,7 @@ static int finish_worker(Store *store, int64_t now, char *err, size_t errlen)
 
 static int start_due(Store *store, int64_t now, char *err, size_t errlen)
 {
+    int outer = sqlite3_get_autocommit(store->db);
     sqlite3_stmt *statement = NULL;
     char *target = NULL;
     int64_t id = 0;
@@ -667,7 +681,7 @@ database_failure:
     (void)database_error(store, err, errlen);
 failure:
     sqlite3_finalize(statement); statement = NULL;
-    (void)store_exec(store, "ROLLBACK TO monitor_claim; RELEASE monitor_claim", NULL, 0);
+    rollback_savepoint(store, "monitor_claim", outer);
 done:
     sqlite3_finalize(statement);
     free(target);
@@ -693,7 +707,24 @@ int monitor_tick(Store *store, int64_t now, char *err, size_t errlen)
     if (!scalar(store, "PRAGMA busy_timeout", 0, &timeout))
         return database_error(store, err, errlen);
     (void)sqlite3_busy_timeout(store->db, 0);
-    ok = !worker.active || finish_worker(store, now, err, errlen);
+    ok = incident_tick(store, now, err, errlen);
+    if (ok && worker.active) {
+        int current = 0;
+        sqlite3_stmt *revision_check = NULL;
+        int read_ok = sqlite3_prepare_v2(store->db,
+            "SELECT revision FROM monitors WHERE id=?", -1, &revision_check, NULL) == SQLITE_OK &&
+            sqlite3_bind_int64(revision_check, 1, worker.id) == SQLITE_OK;
+        if (read_ok) {
+            int rc = sqlite3_step(revision_check);
+            if (rc == SQLITE_ROW)
+                current = sqlite3_column_int64(revision_check, 0) == worker.revision;
+            else if (rc != SQLITE_DONE) read_ok = 0;
+        }
+        sqlite3_finalize(revision_check);
+        if (!read_ok) ok = database_error(store, err, errlen);
+        else if (!current) clear_worker();
+    }
+    if (ok) ok = !worker.active || finish_worker(store, now, err, errlen);
     if (ok && !worker.active)
         ok = start_due(store, now, err, errlen);
     (void)sqlite3_busy_timeout(store->db, timeout);

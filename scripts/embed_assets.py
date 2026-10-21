@@ -42,6 +42,8 @@ PAGES = (
          "Scopri come dialogano interfaccia, registro, controlli e invii email."),
     Page("directory", "/rubrica", "Rubrica referenti", "Persone e gruppi",
          "Gestisci persone, gruppi e assegnazioni condivise ai certificati."),
+    Page("renewals", "/rinnovi", "Agenda rinnovi", "Pianificazione operativa",
+         "Pianifica richieste, rinnovi e installazioni e controlla le attività in ritardo."),
 )
 
 LANGUAGES = ("it", "en", "fr", "es", "zh-CN", "ja")
@@ -65,7 +67,7 @@ def load_catalogs(root):
             if sorted(re.findall(r"\{\d+\}", text)) != sorted(re.findall(r"\{\d+\}", source[key])):
                 raise ValueError(f"Translation placeholders differ: {language}/{key}")
     template = (root / "web" / "index.html").read_text(encoding="utf-8")
-    app = (root / "web" / "app.js").read_text(encoding="utf-8")
+    app = '\n'.join((root / "web" / filename).read_text(encoding="utf-8") for filename in ("app.js","extensions.js","operations-ui.js","incidents-ui.js"))
     references = set(re.findall(r'data-i18n(?:-[a-z-]+)?="([^"]+)"', template))
     references.update(re.findall(r"\bmsg\('([^']+)'", app))
     server_keys = json.loads((root / "web" / "server-messages.json").read_text(encoding="utf-8"))
@@ -214,7 +216,8 @@ def main():
         (pages_dir / f"{name}.html").write_bytes(data)
         assets.append((f"{name}_html", data))
     assets.extend((name, (root / "web" / filename).read_bytes()) for name, filename in (
-        ("app_css", "app.css"), ("app_js", "app.js"), ("i18n_js", "i18n.js"),
+        ("app_css", "app.css"), ("app_js", "app.js"), ("i18n_js", "i18n.js"), ("extensions_js", "extensions.js"),
+        ("operations_ui_js", "operations-ui.js"), ("incidents_ui_js", "incidents-ui.js"),
     ))
     catalog_script = "window.CertificateManagerCatalogs=" + json.dumps(catalogs, ensure_ascii=False, separators=(",", ":")) + ";\n"
     catalog_script += "window.CertificateManagerServerMessages=" + json.dumps(server_keys) + ";\n"

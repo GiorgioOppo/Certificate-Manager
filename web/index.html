@@ -10,6 +10,9 @@
   <script src="/i18n-catalogs.js" defer></script>
   <script src="/i18n.js" defer></script>
   <script src="/app.js" defer></script>
+  <script src="/extensions.js" defer></script>
+  <script src="/operations-ui.js" defer></script>
+  <script src="/incidents-ui.js" defer></script>
 </head>
 <body data-page="overview">
   <a class="skip-link" href="#main"><span data-i18n="m_649b9da29556">Vai al contenuto</span></a>
@@ -28,6 +31,7 @@
       <a class="nav-link" href="/promemoria"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9ZM9 21h6"/></svg><span class="nav-text"><span data-i18n="m_01b343c1fbd0">Promemoria</span></span><span id="nav-alert-count" class="nav-count">0</span></a>
       <a class="nav-link" href="/email"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 6 9 7 9-7"/></svg><span class="nav-text"><span data-i18n="m_a859d3ed322f">Coda email</span></span><span id="nav-delivery-count" class="nav-count">0</span></a>
       <a class="nav-link" href="/rubrica"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M17 5h5M17 10h5M18 15h4"/></svg><span class="nav-text"><span data-i18n="flow.directory">Rubrica</span></span></a>
+      <a class="nav-link" href="/rinnovi"><span class="nav-text" data-i18n="flow.x_agenda">Agenda rinnovi</span></a>
       <a class="nav-link" href="/workflow"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="2" width="8" height="5" rx="1"/><rect x="2" y="17" width="8" height="5" rx="1"/><rect x="14" y="17" width="8" height="5" rx="1"/><path d="M12 7v5M6 17v-5h12v5"/></svg><span class="nav-text"><span data-i18n="workflow.nav">Workflow</span></span></a>
     </nav>
     <div class="sidebar-bottom">
@@ -131,10 +135,13 @@
             </tr></tbody>
           </table>
         </section>
+        <div id="inventory-mapping" class="workflow-form-grid"></div>
         <label class="inventory-text-label" for="inventory-text" data-i18n="flow.csv_text_label">Contenuto CSV</label>
         <textarea id="inventory-text" rows="5" spellcheck="false" aria-describedby="inventory-schema-help" placeholder="url,business_name,business_email,technical_name,technical_email"></textarea>
         <div class="action-row"><input id="inventory-file" type="file" accept=".csv,text/csv" aria-label="CSV"><button id="inventory-preview" type="button" class="button button-secondary" data-i18n="flow.csv_preview">Valida CSV</button><button id="inventory-check" type="button" class="button button-secondary" data-i18n="flow.csv_check" disabled>Verifica URL</button><button id="inventory-import" type="button" class="button button-primary" data-i18n="flow.csv_import" disabled>Importa verificati</button><button id="inventory-cancel" type="button" class="text-button" data-i18n="flow.stop" hidden>Interrompi</button></div>
+        <div id="inventory-tools" class="action-row"></div>
         <p id="inventory-feedback" role="status" aria-live="polite"></p><div id="inventory-results" class="inventory-results"></div>
+        <div id="inventory-batches"></div>
       </details>
       <p id="upload-progress" class="upload-progress" role="status" aria-live="polite" hidden></p>
     </section>
@@ -185,6 +192,7 @@
       <ul id="outbox-list" class="outbox-list"></ul><div id="outbox-empty" class="outbox-empty"><strong><span data-i18n="m_66e6d7f7f797">Nessuna email preparata</span></strong><p><span data-i18n="m_2849af5cc93f">Aggiungi i referenti nei dettagli di un certificato. I promemoria e le distribuzioni compariranno qui.</span></p></div>
     </section>
     <section id="directory" class="directory-view" data-view="directory" aria-labelledby="page-title"><div id="directory-content"></div></section>
+    <section id="renewals" class="renewals-view" data-view="renewals" aria-labelledby="page-title"><div id="renewals-content"></div></section>
     <section id="workflow" class="workflow-view" data-view="workflow" aria-labelledby="page-title">
       <div class="workflow-tabs" role="tablist" aria-label="Esplora il workflow" data-i18n-aria-label="workflow.tabs_label"><button id="workflow-tab-components" class="workflow-tab" type="button" role="tab" aria-selected="true" aria-controls="workflow-components" tabindex="0"><span data-i18n="workflow.tab_components">Componenti</span></button><button id="workflow-tab-lifecycle" class="workflow-tab" type="button" role="tab" aria-selected="false" aria-controls="workflow-lifecycle" tabindex="-1"><span data-i18n="workflow.tab_lifecycle">Ciclo del certificato</span></button><button id="workflow-tab-renewal" class="workflow-tab" type="button" role="tab" aria-selected="false" aria-controls="workflow-renewal" tabindex="-1"><span data-i18n="workflow.tab_renewal">Rinnovo e invii</span></button></div>
 

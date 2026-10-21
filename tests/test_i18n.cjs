@@ -58,6 +58,10 @@ test('all static, dynamic and server translation references exist', () => {
   const references = [...serverKeys];
   for (const match of read('web/index.html').matchAll(/data-i18n(?:-[\w-]+)?="([^"]+)"/g)) references.push(match[1]);
   for (const match of read('web/app.js').matchAll(/\bmsg\(\s*['"]([^'"]+)['"]/g)) references.push(match[1]);
+  for (const [filename,prefix] of [['extensions.js','flow.x_'],['operations-ui.js','ops.'],['incidents-ui.js','incident.']]) {
+    for(const match of read('web/'+filename).matchAll(/(?<![\w.])t\('([^']+)'\s*[,)]/g))references.push(prefix+match[1]);
+  }
+  for(const match of read('src/lifecycle.c').matchAll(/(?:FAIL_IF\([^\n]+,|reason\(out,&first,)\s*"([a-z_]+)"/g)) references.push('ops.reason_'+match[1]);
   for (const key of references) assert.ok(Object.hasOwn(catalogs.it, key), `Unknown translation reference ${key}`);
   assert.equal(new Set(serverKeys).size, serverKeys.length, 'Duplicate server message references');
 });

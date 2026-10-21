@@ -101,7 +101,7 @@ Conserva l’archivio in un luogo privato. In caso di ripristino mantieni propri
 
 ## Navigazione dell’interfaccia
 
-L’interfaccia è suddivisa in **nove pagine**, ciascuna con il proprio indirizzo e soltanto i controlli della funzione scelta. Il menu laterale apre la pagina corrispondente; su schermi piccoli mantiene le etichette e scorre orizzontalmente.
+L’interfaccia è suddivisa in **dieci pagine**, ciascuna con il proprio indirizzo e soltanto i controlli della funzione scelta. Il menu laterale apre la pagina corrispondente; su schermi piccoli mantiene le etichette e scorre orizzontalmente.
 
 | Pagina | Indirizzo | Contenuto |
 | --- | --- | --- |
@@ -109,6 +109,7 @@ L’interfaccia è suddivisa in **nove pagine**, ciascuna con il proprio indiriz
 | Certificati | `/certificati` | Registro, ricerca, filtri e dettagli con referenti e rinnovo. |
 | Servizi monitorati | `/servizi` | Configurazione degli URL, ultimi esiti e avvisi periodici. |
 | Importa certificati | `/importa` | Anteprima dei file PEM, DER, CRT e CER e inventario di URL da CSV. |
+| Rinnovi | `/rinnovi` | Agenda delle pratiche, filtri per fase, responsabile e ritardo. |
 | Verifica endpoint | `/verifica` | Recupero e confronto del certificato esposto da un servizio. |
 | Promemoria | `/promemoria` | Scadenze registrate e preferenze delle notifiche desktop. |
 | Coda email | `/email` | Messaggi preparati, stato degli invii e download `.eml`. |
@@ -128,9 +129,15 @@ url,business_name,business_email,technical_name,technical_email
 https://servizio.example.test,Responsabile,referente@example.test,Operazioni,tecnico@example.test
 ```
 
-Per più destinatari nella stessa cella, separa nomi e indirizzi email con punto e virgola, mantenendo lo stesso ordine. Sono supportate le virgolette CSV per i campi che contengono virgole. Usa **Valida CSV**, poi **Verifica URL**, consulta gli esiti e scegli **Importa verificati**. La scheda deve restare aperta: elabora gli indirizzi uno alla volta e consente di interrompere il ciclo.
+Per più destinatari nella stessa cella, separa nomi e indirizzi email con punto e virgola, mantenendo lo stesso ordine. Sono supportate le virgolette CSV. Scegli il separatore del file fra virgola, punto e virgola e tabulazione; con **Associa colonne** puoi collegare intestazioni diverse ai cinque campi previsti o ignorare colonne aggiuntive.
 
-Prima dell’importazione viene ripetuta l’acquisizione; un’impronta diversa da quella appena esaminata blocca la riga. Gli esiti TLS restano visibili anche quando il certificato è disponibile soltanto per diagnosi. I referenti vengono uniti alle assegnazioni già presenti per ruolo e indirizzo email. Ogni riga ha il proprio esito: un errore non annulla quelle già importate. Correggi il testo e riprova le righe segnalate.
+1. Usa **Valida CSV** per vedere una tabella con numeri di riga originali, valori ed errori per campo. Puoi correggere una riga direttamente nell’anteprima e scaricare il CSV corretto o il report degli esiti.
+2. Seleziona tutte le righe oppure soltanto quelle valide. **Verifica URL** salva un lotto persistente: il backend verifica gli indirizzi e prepara un piano, senza importare automaticamente.
+3. Apri il riepilogo e controlla nuovo certificato o duplicato, CA, date, monitor e referenti aggiunti/conservati. Per la stessa email con nomi diversi scegli esplicitamente se mantenere il nome della rubrica o aggiornarlo; il riepilogo mostra i certificati collegati alla persona.
+4. Approva le righe pronte da importare. Il worker ripete l’acquisizione e richiede l’impronta esaminata. Cambiamenti incompatibili nel registro richiedono un nuovo piano e una nuova approvazione.
+5. Per ciascuna riga, certificati, monitor, persone, assegnazioni, audit e ricevuta contro i duplicati vengono salvati insieme. Un errore annulla quella riga; non annulla quelle già riuscite.
+
+Il lotto prosegue anche chiudendo la scheda, purché il processo `serve` o `watch` rimanga attivo; dopo un riavvio può riprendere le righe in sospeso. La sezione dei lotti salvati permette di consultare avanzamento ed esiti, mettere in pausa, ripianificare e scaricare report o sole righe da correggere. Pianificare non equivale ad approvare l’importazione. La guida ai [20 miglioramenti dei flussi](WORKFLOW-IMPROVEMENTS.it.md) descrive i passaggi e i limiti.
 
 ## Registro, ricerca e catena
 
@@ -172,6 +179,10 @@ Il confronto usa l'impronta del certificato associato nel registro. Il monitor d
 
 Configurazioni, ultimo esito e avvisi sono conservati in SQLite e rimangono disponibili dopo il riavvio. Puoi segnare gli avvisi come letti senza modificare il monitor. Gli eventi sono visibili nella dashboard e possono comparire nelle notifiche desktop facoltative con la pagina aperta. Per ciascun monitor puoi inoltre **abilitare gli avvisi email** e scegliere i destinatari: nuovi eventi di anomalia e ripristino entrano nella coda, senza ripetere errori identici. L’opzione inizialmente è disabilitata e la sua attivazione non reinvia lo storico.
 
+Per ciascun monitor puoi impostare da **1 a 10 errori di raggiungibilità consecutivi** prima dell’avviso email; il valore predefinito è uno. Gli esiti tecnici sono comunque visibili subito. Errori TLS e impronte inattese non attendono questa soglia. Una finestra di manutenzione sospende i nuovi avvisi email di anomalia/ripristino, conserva i controlli e gli eventi e richiede un controllo fresco alla fine. Un monitor in pausa deve comunque essere riattivato.
+
+Puoi prendere in carico un evento indicando responsabile, note, termine e stato aperto/in analisi/risolto. Questo stato organizzativo non modifica il risultato tecnico. Per un certificato cambiato, il dettaglio dell’evento conduce alla verifica online: acquisisci nuovamente, confronta e importa esplicitamente, poi collega un rinnovo solo se compatibile. Nessun evento approva automaticamente un’impronta.
+
 Il caricamento o collegamento di un rinnovo **lascia i monitor associati al precedente**. Durante la transizione vengono riconosciute sia la sua impronta sia quelle dei rinnovi esplicitamente approvati nelle fasi firmato, consegnato o installazione. La verifica di fiducia, nome e validità TLS resta obbligatoria per tutti. Un certificato diverso e non approvato rimane un cambiamento inatteso. Soltanto la chiusura verificata del rinnovo trasferisce i monitor al nuovo certificato.
 
 ## Referenti e promemoria
@@ -183,9 +194,11 @@ Apri il dettaglio di un certificato e aggiungi le persone nelle due sezioni:
 
 Puoi inserire più destinatari per ogni ruolo. L'email è obbligatoria; il nome è facoltativo. Premi **Salva referenti** per applicare aggiunte e rimozioni, anche quando vuoi svuotare entrambe le liste. Per ricevere entrambi i tipi di messaggio, assegna la persona a entrambi i ruoli. La rimozione di un destinatario elimina i suoi messaggi in attesa o non riusciti dalla coda pertinente.
 
-La pagina **Rubrica** (`/rubrica`) centralizza persone e gruppi. Puoi assegnarli a più certificati con il ruolo desiderato. La modifica di un indirizzo email o dei membri di un gruppo si riflette sulle assegnazioni collegate e sui destinatari degli invii ancora in attesa; lo storico degli invii conclusi viene conservato.
+La pagina **Rubrica** (`/rubrica`) centralizza persone e gruppi. Prima di una modifica condivisa mostra i certificati interessati, i messaggi in attesa e i destinatari dei monitor collegati: puoi esaminarli prima di continuare, insieme a dati e appartenenze prima/dopo e all’impatto proposto sui certificati. Puoi assegnarli a più certificati con il ruolo desiderato. La modifica di un indirizzo email o dei membri di un gruppo si riflette sulle assegnazioni collegate e sui destinatari degli invii ancora in attesa; lo storico degli invii conclusi viene conservato.
 
 Nel dettaglio del certificato puoi cambiare le soglie con numeri distinti da **0 a 3650 giorni**, includendo sempre `0` per la scadenza, oppure sospendere la regola. Le soglie dei filtri di ricerca restano 45/30/15/2 giorni. Puoi indicare un destinatario di escalation e un ritardo da **0 a 365 giorni dal primo promemoria registrato**. L’escalation non si ripete per lo stesso certificato e destinatario; continua finché il certificato resta attivo, anche se è già stato caricato un rinnovo.
+
+**Simula promemoria** mostra il calendario previsto, le soglie già registrate o superate, i destinatari e l’escalation usando i dati del modulo, senza salvare regole né creare email. Nella pagina **Promemoria** puoi salvare modelli riutilizzabili: seleziona i certificati attivi, indica le eccezioni e approva il riepilogo prima/dopo. Se la regola o il registro cambiano, rigenera l’anteprima prima di applicare.
 
 Il server controlla scadenze e coda ogni 60 secondi, anche con la scheda del browser chiusa. Gli avvisi restano visibili nella dashboard. Le notifiche desktop sono facoltative, richiedono il consenso e funzionano con questa pagina aperta. Il programma deve rimanere in esecuzione; al riavvio recupera la soglia più urgente raggiunta.
 
@@ -197,6 +210,8 @@ Le email di scadenza sono preparate per ciascun referente, con prevenzione dei d
 
 Per uno stesso CN possono esserci **due o più certificati validi contemporaneamente**, ciascuno con la propria impronta SHA-256. Validità X.509 e impiego operativo sono separati: il precedente può essere **In uso** mentre il nuovo è **Pronto** o **In distribuzione**. **Ritirato** indica una voce archiviata, anche se non ancora scaduta.
 
+La pagina **Rinnovi** (`/rinnovi`) raccoglie tutte le pratiche nell’agenda, filtrabili per fase, responsabile e ritardo operativo. Nel dettaglio del certificato scegli fra tutte le pratiche aperte e concluse. Il confronto fra precedente e candidato mostra CN, SAN, CA, date, impronta e algoritmi prima del collegamento.
+
 Nel dettaglio del certificato apri la pratica di rinnovo e registra data della richiesta, rinnovo previsto, installazione prevista, responsabile e note. Sono scadenze organizzative: non cambiano le date X.509 del certificato. Le fasi della pratica sono **Da richiedere → In attesa della CA → Firmato → Consegnato → In installazione → Verificato**. Cambiare una fase descrittiva non richiede un certificato alla CA, non invia un’email e non dimostra l’installazione.
 
 1. Aggiungi e salva referenti e referenti tecnici, anche dalla rubrica.
@@ -205,9 +220,11 @@ Nel dettaglio del certificato apri la pratica di rinnovo e registra data della r
 4. Il backend collega le voci, riusa una pratica aperta senza sostituto e copia referenti, origini delle assegnazioni ai gruppi ed eventuale regola promemoria. Prepara per i tecnici un’email con certificato pubblico e catena disponibile. **Il precedente resta attivo con i suoi monitor e promemoria.** Con SMTP disabilitato i messaggi restano in coda.
 5. Il tecnico installa il nuovo certificato sui servizi con gli strumenti previsti per l’infrastruttura. Gli endpoint possono essere aggiornati in giorni diversi: la pratica mostra la verifica separata di ciascuno.
 6. Dopo l’installazione, richiedi la verifica di un singolo endpoint oppure di tutti. Un’osservazione automatica precedente alla richiesta non basta. I servizi in pausa devono essere riattivati.
-7. **Completa pratica** riesce soltanto quando ogni endpoint associato presenta l’impronta nuova, supera tutte le verifiche TLS e ha richiesta ed esito positivo negli ultimi **15 minuti**. Se la prova è vecchia, richiedila di nuovo. La chiusura trasferisce i monitor verificati al nuovo certificato e archivia il precedente soltanto se non conserva altre associazioni; a quel punto cessano i suoi promemoria e vengono rimossi gli invii ancora in attesa o non riusciti.
+7. Consulta la **checklist prima della chiusura**, che spiega per ogni endpoint pause, richieste o prove mancanti/vecchie, TLS fallito, impronta errata, associazioni cambiate e URL duplicati. La checklist e la chiusura usano le stesse condizioni del server. Aggiornare la checklist non avvia una verifica TLS. **Completa pratica** riesce soltanto quando ogni endpoint associato presenta l’impronta nuova, supera tutte le verifiche TLS e ha richiesta ed esito positivo negli ultimi **15 minuti**. Se la prova è vecchia, richiedila di nuovo. La chiusura trasferisce i monitor verificati al nuovo certificato e archivia il precedente soltanto se non conserva altre associazioni; a quel punto cessano i suoi promemoria e vengono rimossi gli invii ancora in attesa o non riusciti.
 
 Se non esistono endpoint, la pratica non può dichiarare un’installazione verificata. È disponibile un **ritiro manuale** distinto, con responsabile e nota esplicita, solo quando il precedente non ha più monitor associati, compresi quelli in pausa. Lo stato finale è **Ritirato**, non **Verificato**. Lo stesso principio mantiene distinguibili gli archivi storici migrati.
+
+La pratica include un pannello di consegna per destinatario tecnico, con stato, tentativi, errori, download `.eml` e ritentativo dei soli messaggi non riusciti. L’accettazione SMTP non dimostra ricezione né installazione. Puoi scaricare un verbale JSON con dati correnti e, dopo la chiusura, la prova catturata prima di trasferire i monitor o ritirare il precedente. La prova catturata non cambia con le osservazioni successive; l’eliminazione della pratica può rimuoverla. La cronologia della pagina Workflow registra operazioni locali senza identità autenticata né garanzia antimanomissione.
 
 Il rinnovo riesce anche senza referenti tecnici. Puoi aggiungerli in seguito e usare **Prepara email ai tecnici**; la distribuzione evita duplicati per certificato e destinatario. **Scarica certificato e catena** restituisce il bundle pubblico disponibile. Il programma non emette, firma o installa certificati e non conserva chiavi private TLS.
 
@@ -260,9 +277,9 @@ Sono accettati certificati X.509 PEM, bundle PEM contenenti esclusivamente certi
 
 I duplicati sono riconosciuti tramite impronta SHA-256. Reimportare un certificato aggiorna la sorgente e rende disponibile il PEM senza perdere i suoi riferimenti o lo storico degli avvisi.
 
-Un archivio delle versioni precedenti viene migrato automaticamente allo schema **v5**, mantenendo metadati, referenti e storico disponibili. Sono aggiunte pratiche di rinnovo e prove per endpoint, rubrica e gruppi, regole di promemoria/escalation e destinatari degli avvisi dei monitor. Le sostituzioni già archiviate rimangono nello storico come ritiri pregressi, senza attribuire loro una verifica di installazione mai eseguita. La migrazione non avvia monitor sulle vecchie voci finché non vengono configurati. Le vecchie voci prive di PEM sono indicate come legacy: reimporta i file originali, insieme alle CA disponibili, per abilitare ricostruzione della catena, download e distribuzione.
+Un archivio delle versioni precedenti viene migrato automaticamente allo schema **v6**, mantenendo metadati, referenti e storico disponibili. Sono conservati pratiche, prove per endpoint, rubrica, gruppi e regole delle versioni precedenti; sono aggiunti lotti CSV persistenti, ricevute per riga, modelli di regole, gestione delle anomalie/manutenzioni, verbali di chiusura e audit. La cronologia registra nuove operazioni dalla migrazione, senza ricostruire azioni precedenti. Le sostituzioni già archiviate rimangono nello storico come ritiri pregressi, senza attribuire loro una verifica di installazione mai eseguita. La migrazione non avvia monitor sulle vecchie voci finché non vengono configurati. Le vecchie voci prive di PEM sono indicate come legacy: reimporta i file originali, insieme alle CA disponibili, per abilitare ricostruzione della catena, download e distribuzione.
 
-L'eliminazione di un certificato rimuove anche referenti, storico dei promemoria e messaggi della coda associati; non cancella il file originale sul computer. Per un backup arresta tutti i processi che usano l'archivio e copia il file `.db` prima di riavviare. È consigliabile fare una copia anche prima di aggiornare una versione precedente.
+L'eliminazione di un certificato rimuove anche referenti, storico dei promemoria e messaggi della coda associati; non cancella il file originale sul computer. Per un backup arresta tutti i processi che usano l’archivio e copia il file `.db` e la chiave `<archivio>.smtp.key`, quando presente, prima di riavviare. Proteggi entrambi e conserva la chiave con permessi `0600`. È consigliabile fare una copia anche prima di aggiornare una versione precedente.
 
 ## Compilazione e verifiche
 
@@ -272,7 +289,7 @@ Richiede un compilatore C11, OpenSSL, SQLite almeno 3.24, libcurl con supporto S
 make test
 ```
 
-La suite comprende test C sulle soglie, i destinatari e la coda, e test di integrazione Python su importazione PEM/DER/bundle, migrazione, catene CA, referenti multipli, rinnovi sovrapposti, verifica fresca per endpoint, rubrica e gruppi, regole di escalation, avvisi email dei monitor, distribuzione pubblica, deduplicazione, anteprime `.eml`, eliminazione e API HTTP con controlli CSRF e Host. La suite online avvia server TLS locali con CA temporanee e controlla fiducia, nomi, scadenze, errori TCP/TLS e importazione della stessa acquisizione scaricabile. I test dei monitor verificano controlli automatici, cambiamenti, ripristini, deduplicazione degli avvisi, persistenza, rinnovo e disponibilità dell'interfaccia durante un collegamento TLS bloccato. I test delle pagine verificano i nove indirizzi diretti, la separazione dei contenuti, la navigazione e le intestazioni di sicurezza. I test SMTP verificano cifratura e conservazione delle password, migrazione, configurazione via API, priorità sulla configurazione ambiente e collegamenti TLS autenticati senza invio durante la prova. I test usano database e certificati temporanei, non richiedono SMTP reale e non contattano siti pubblici.
+Le suite aggiuntive coprono rollback completo della riga CSV, conflitti dei piani, lotti persistenti, simulazione/modelli di regole, checklist condivisa, prove di chiusura conservate, prese in carico, manutenzioni e soglie degli errori. La suite comprende test C sulle soglie, i destinatari e la coda, e test di integrazione Python su importazione PEM/DER/bundle, migrazione, catene CA, referenti multipli, rinnovi sovrapposti, verifica fresca per endpoint, rubrica e gruppi, regole di escalation, avvisi email dei monitor, distribuzione pubblica, deduplicazione, anteprime `.eml`, eliminazione e API HTTP con controlli CSRF e Host. La suite online avvia server TLS locali con CA temporanee e controlla fiducia, nomi, scadenze, errori TCP/TLS e importazione della stessa acquisizione scaricabile. I test dei monitor verificano controlli automatici, cambiamenti, ripristini, deduplicazione degli avvisi, persistenza, rinnovo e disponibilità dell'interfaccia durante un collegamento TLS bloccato. I test delle pagine verificano i dieci indirizzi diretti, la separazione dei contenuti, la navigazione e le intestazioni di sicurezza. I test SMTP verificano cifratura e conservazione delle password, migrazione, configurazione via API, priorità sulla configurazione ambiente e collegamenti TLS autenticati senza invio durante la prova. I test usano database e certificati temporanei, non richiedono SMTP reale e non contattano siti pubblici.
 
 Per provare un eseguibile alternativo:
 

@@ -881,3 +881,35 @@ textarea:focus-visible { outline: 3px solid #79a5ff; outline-offset: 3px; }
  .directory-panel, .import-preview-dialog { padding: 18px; }
  .action-row .button { max-width: 100%; }
 }
+/* Shared operational flows retain the existing local interface styles. */
+.ext-panel,.ops-panel,.incident-panel{margin-top:24px;padding:22px;min-width:0}
+.ext-table-scroll,.ops-table-wrap{overflow:auto;max-width:100%;margin:16px 0}
+.ext-table,.ops-table{width:100%;border-collapse:collapse;text-align:left;font-size:13px}
+.ext-table th,.ext-table td,.ops-table th,.ops-table td{padding:12px 10px;border-bottom:1px solid var(--line,#dde5ee);vertical-align:top;overflow-wrap:anywhere;min-width:100px}
+.ext-table th,.ops-table th{font-weight:650;color:var(--text-secondary,#52647a)}
+.ext-dialog,.ops-dialog{width:min(1000px,calc(100vw - 32px));padding:24px;max-height:88vh;overflow:auto}
+.ext-review-row{padding:18px 0;border-bottom:1px solid var(--line,#dde5ee)}
+.ext-review-row>p{overflow-wrap:anywhere}
+.ops-feedback,.ops-status{padding:10px 0;overflow-wrap:anywhere}
+.ops-row-error{color:#9c3143}
+.ops-certificate-options{max-height:300px;overflow:auto;display:grid;gap:8px;padding:10px 0}
+.ops-agenda-cards{display:grid;gap:14px;margin-top:18px}
+.ops-agenda-cards>article{padding:18px;border:1px solid var(--line,#dde5ee);border-radius:12px}
+.ops-agenda-cards h3{margin:0 0 10px}
+#inventory-mapping{padding:16px 0;align-items:end}
+#inventory-map-fields{grid-column:1 / -1}
+#inventory-tools{margin:12px 0}
+.inventory-preview-table{min-width:1420px}
+.inventory-preview-table th:first-child,.inventory-preview-table td:first-child{width:48px;min-width:48px;max-width:48px;left:0}
+.inventory-preview-table th:nth-child(2),.inventory-preview-table td:nth-child(2){width:65px;min-width:65px;max-width:65px;left:48px}
+.inventory-preview-table th:nth-child(3),.inventory-preview-table td:nth-child(3){position:sticky;left:113px;min-width:160px;max-width:200px;background:inherit;z-index:1}
+.inventory-preview-table thead th:nth-child(3){z-index:3;background:#edf3fa}
+.inventory-preview-table .button{white-space:normal;font-size:12px;min-height:34px;padding:7px 10px}
+.inventory-select-cell input{width:18px;height:18px}
+#renewals-content{min-width:0}
+#reminders>.ops-panel{grid-column:1 / -1}
+#renewals-content>.ops-panel,#reminders>.ops-panel,#workflow>.ops-panel{background:#fff;border:1px solid var(--line);border-radius:14px}
+.ops-row-changed{background:#f3f7fe}
+.ext-section{padding:20px 0;border-bottom:1px solid var(--line)}
+.ext-note,.ext-note-line{font-size:12px;line-height:1.7;color:var(--muted);overflow-wrap:anywhere}
+@media(max-width:650px){.ext-panel,.ops-panel,.incident-panel{padding:16px}.ext-dialog,.ops-dialog{padding:16px}.ops-table,.ext-table{min-width:620px}}

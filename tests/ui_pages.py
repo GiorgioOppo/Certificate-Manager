@@ -18,6 +18,7 @@ PAGES = {
     "/email": ("delivery", "outbox-list"),
     "/workflow": ("workflow", "workflow-components"),
     "/rubrica": ("directory", "directory-content"),
+    "/rinnovi": ("renewals", "renewals-content"),
 }
 
 

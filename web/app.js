@@ -121,7 +121,8 @@
     if (!cert) { message(msg('m_c9ac1fd7cfb2'), true); return; }
     if (currentPage === 'verify') {
       setRemoteExpected(cert);
-      byId('remote-target').value = /^https:\/\//i.test(string(cert.source, '')) ? cert.source : string(cert.common_name, '');
+      const sourceTarget = new URLSearchParams(window.location.search).get('target');
+      byId('remote-target').value = sourceTarget || (/^https:\/\//i.test(string(cert.source, '')) ? cert.source : string(cert.common_name, ''));
       remoteFeedback(msg('m_f80311c9f5ff'));
       byId('remote-target').focus({ preventScroll: true });
     } else if (currentPage === 'monitoring') {
@@ -273,6 +274,7 @@
     byId('remote-result').hidden = true;
     byId('remote-download').removeAttribute('href');
     updateRemoteButtons();
+    if(window.CertificateEnhancements) window.CertificateEnhancements.remote(null,remoteExpectedId);
   }
 
   function setRemoteExpected(cert) {
@@ -366,6 +368,7 @@
       byId('remote-import-note').classList.toggle('remote-import-warning', !verified);
     }
     updateRemoteButtons();
+    if(window.CertificateEnhancements) window.CertificateEnhancements.remote(result,remoteExpectedId);
   }
 
   async function checkRemote(event) {
@@ -413,6 +416,7 @@
       const text = msg('m_3ad59c9b7ae5', [imported, imported === 1 ? msg('m_c00b4773d246') : msg('m_fd3fd468ab84'), duplicates ? msg('m_98927fd9a8c0', [duplicates]) : '', monitoringText, remoteResult.verified ? '' : msg('m_cc989104ae06')]);
       remoteFeedback(text, !!result.monitoring_error);
       message(text, !!result.monitoring_error);
+      if(window.CertificateEnhancements) window.CertificateEnhancements.remote(remoteResult,remoteExpectedId);
     } catch (error) {
       if (error.status === 400 || error.status === 404) {
         remoteSnapshotExpired = true;
@@ -1306,6 +1310,7 @@
         renderMonitoring();
         renderOverview();
         renderDirectory();
+        if (window.CertificateEnhancements) window.CertificateEnhancements.render(state);
         if (detailsCertificate && byId('details-dialog').open && !workflowDirty && !contactsDirty) {
           detailsCertificate = state.certificates.find(cert => String(cert.id) === String(detailsCertificate.id)) || detailsCertificate;
           renderCertificateWorkflow(detailsCertificate);
@@ -1767,6 +1772,11 @@
   let inventoryStopped = false;
   let inventoryReadGeneration = 0;
   let inventoryReading = false;
+  let inventoryMapping = null;
+  let inventoryDelimiter = ',';
+  let inventoryBatchId = null;
+  let inventoryBatchData = null;
+  const selectedRenewalJobs = new Map();
   let directoryEditingPerson = null;
   let directoryEditingGroup = null;
   const operationalLabels = () => ({ registered: flow('registered'), in_use: flow('in_use'), installed: flow('in_use'), ready: flow('ready'), staged: flow('ready'), pending_installation: flow('ready'), deploying: flow('deploying'), retired: flow('retired'), archived: flow('retired') });
@@ -1935,7 +1945,8 @@
   }
 
   // RFC 4180 quoting, CRLF, embedded newlines and optional UTF-8 BOM.
-  function parseInventoryCSV(source) {
+  function parseInventoryCSV(source, options = {}) {
+    const delimiter = options.delimiter || ',';
     const text = source.replace(/^\uFEFF/, '');
     const records = [];
     let cells = [], value = '', quoted = false, closed = false, syntax = false;
@@ -1962,8 +1973,8 @@
       } else if (character === '"' && !value && !closed) {
         quoted = true; syntax = true; quoteLine = line;
       }
-      else if (character === ',' || character === '\n' || character === '\r') {
-        if (character === ',') { cells.push(value); value = ''; closed = false; syntax = true; }
+      else if (character === delimiter || character === '\n' || character === '\r') {
+        if (character === delimiter) { cells.push(value); value = ''; closed = false; syntax = true; }
         else {
           finishRecord();
           if (character === '\r' && text[index + 1] === '\n') index++;
@@ -1976,8 +1987,11 @@
     if (cells.length || value || closed || syntax) finishRecord();
     if (records.length < 2) throw new Error(flow('csv_empty'));
     const columns = ['url', 'business_name', 'business_email', 'technical_name', 'technical_email'];
-    const header = records.shift().cells.map(cell => cell.trim().toLowerCase());
-    if (new Set(header).size !== header.length || !header.includes('url') || header.some(key => !columns.includes(key))) throw new Error(flow('csv_header'));
+    const rawHeader = records.shift().cells;
+    if (options.headersOnly) return rawHeader;
+    const header = rawHeader.map((cell,index) => options.mapping ? options.mapping[index] || '' : cell.trim().toLowerCase());
+    const mapped = header.filter(Boolean);
+    if (new Set(mapped).size !== mapped.length || !header.includes('url') || header.some(key => key && !columns.includes(key)) || (!options.mapping && mapped.length !== header.length)) throw new Error(flow('csv_header'));
     if (records.length > 100) throw new Error(flow('csv_limit'));
     const byteLength = value => new TextEncoder().encode(value).length;
     // Match store_email_valid, including single-label domains and ASCII-only local parts.
@@ -2017,7 +2031,7 @@
     };
     return records.map(record => {
       const values = Object.fromEntries(columns.map(column => [column, '']));
-      header.forEach((column, index) => { values[column] = record.cells[index] || ''; });
+      header.forEach((column, index) => { if(column) values[column] = record.cells[index] || ''; });
       const row = { line: record.line, contacts: [], result: null, imported: false, error: '', target: values.url.trim(), values, extraValues: record.cells.slice(header.length), errors: [], invalidFields: [] };
       const addError = (column, key, invalid = [column]) => {
         const message = flow(key);
@@ -2075,7 +2089,7 @@
       const caption = element('caption', 'visually-hidden', flow('csv_loaded_title'));
       const head = element('thead');
       const headerRow = element('tr');
-      const labels = [flow('csv_row_number'), flow('csv_row_status'), ...fields, flow('csv_error_details')];
+      const labels = [flow('x_select'),flow('csv_row_number'), flow('csv_row_status'), ...fields, flow('csv_error_details'),flow('x_actions')];
       for (const label of labels) {
         const cell = element('th', '', label);
         cell.scope = 'col';
@@ -2092,7 +2106,9 @@
       };
       for (const row of inventoryRows) {
         const tr = element('tr', row.error ? 'is-error' : '');
-        const numberCell = labelledCell(labels[0], 'inventory-preview-line');
+        const selectCell=element('td','inventory-select-cell');const selected=element('input');selected.type='checkbox';selected.checked=row.selected!==false;selected.disabled=inventoryRunning||!!inventoryBatchId||!!row.imported;selected.setAttribute('aria-label',flow('x_select_row',[row.line]));
+        selected.addEventListener('change',()=>{row.selected=selected.checked;renderInventory();});selectCell.append(selected);tr.append(selectCell);
+        const numberCell = labelledCell(labels[1], 'inventory-preview-line');
         numberCell.append(element('strong', '', String(row.line)));
         tr.append(numberCell);
         for (const field of fields) {
@@ -2105,7 +2121,7 @@
           cell.append(element('span', 'inventory-preview-value', row.values && row.values[field] || '—'));
           tr.append(cell);
         }
-        const status = labelledCell(labels[1], 'inventory-preview-status');
+        const status = labelledCell(labels[2], 'inventory-preview-status');
         const statusKey = row.error ? 'csv_row_invalid' : row.imported ? 'csv_row_imported' : row.result ? 'csv_row_checked' : 'csv_row_valid';
         status.append(element('span', `inventory-row-state${row.error ? ' is-error' : ' is-valid'}`, flow(statusKey)));
         if (row.result && !row.error) {
@@ -2123,7 +2139,8 @@
           if (row.result.verification_error) status.append(element('p', 'import-chain-warning', row.result.verification_error));
           if (row.result.verified === false) status.append(element('p', 'import-chain-warning', flow('csv_unverified')));
         }
-        const errors = labelledCell(labels[7], 'inventory-preview-errors');
+        if(row.plan && window.CertificateInventoryUI) status.append(action(flow('x_review_changes'),()=>window.CertificateUI.modal(flow('x_review_changes'),window.CertificateInventoryUI.describePlan(row.plan),flow('x_close'))));
+        const errors = labelledCell(flow('csv_error_details'), 'inventory-preview-errors');
         const messages = (row.errors || []).map(issue => `${fields.includes(issue.column) ? issue.column + ': ' : ''}${issue.message}`);
         if (row.error && !(row.errors || []).some(issue => issue.message === row.error)) messages.push(row.error);
         if ((row.extraValues || []).length) messages.push(flow('csv_raw_extra', [row.extraValues.join(', ')]));
@@ -2133,12 +2150,14 @@
           errors.append(list);
         } else errors.append(element('span', '', '—'));
         tr.insertBefore(status, numberCell.nextSibling);
-        tr.append(errors); body.append(tr);
+        const actions=element('td');const edit=action(flow('x_edit_row'),()=>editInventoryRow(row));edit.disabled=inventoryRunning||row.imported;actions.append(edit);
+        tr.append(errors,actions); body.append(tr);
       }
       table.append(caption, head, body); scroll.append(table); content.append(scroll);
     }
-    byId('inventory-check').disabled = inventoryRunning || inventoryReading || !inventoryRows.length || hasValidationErrors;
-    byId('inventory-import').disabled = inventoryRunning || inventoryReading || !!errorCount || !inventoryRows.some(row => row.result && !row.error && !row.imported);
+    const chosen=inventoryRows.filter(row=>row.selected!==false&&!row.imported);
+    byId('inventory-check').disabled = inventoryRunning || inventoryReading || !chosen.length || chosen.some(row=>(row.errors||[]).length>0);
+    byId('inventory-import').disabled = inventoryRunning || inventoryReading || !inventoryBatchData || !['review','paused'].includes(inventoryBatchData.status) || !(inventoryBatchData.rows||[]).some(row=>row.status==='ready');
     byId('inventory-preview').disabled = inventoryRunning || inventoryReading;
     byId('inventory-text').disabled = inventoryRunning;
     byId('inventory-file').disabled = inventoryRunning;
@@ -2147,54 +2166,49 @@
   function previewInventory() {
     if (inventoryRunning || inventoryReading) return;
     try {
-      inventoryRows = parseInventoryCSV(byId('inventory-text').value);
+      inventoryBatchId = null; inventoryBatchData = null;
+      inventoryRows = parseInventoryCSV(byId('inventory-text').value, { delimiter: inventoryDelimiter, mapping: inventoryMapping });
+      for (const row of inventoryRows) row.selected = true;
       byId('inventory-feedback').textContent = flow('csv_validated', [inventoryRows.length]);
     } catch (error) { inventoryRows = []; byId('inventory-feedback').textContent = error.message; }
     renderInventory();
   }
   async function runInventory(importing) {
-    if (inventoryRunning || inventoryReading || uploading || !inventoryRows.length || inventoryRows.some(row => (row.errors || []).length) || (importing && inventoryRows.some(row => row.error))) return;
+    const selected=inventoryRows.filter(row=>row.selected!==false&&!row.imported);
+    if (inventoryRunning || inventoryReading || uploading || !selected.length || selected.some(row => (row.errors || []).length) || !window.CertificateInventoryUI) return;
     inventoryRunning = true; inventoryStopped = false;
     renderInventory();
-    for (const [index, row] of inventoryRows.entries()) {
-      if (inventoryStopped) break;
-      if (row.imported || (row.errors || []).length || (importing && (!row.result || row.error))) continue;
-      if (!importing) { row.error = ''; row.result = null; }
-      row.runtimeErrorField = '';
-      let failureField = 'url';
-      byId('inventory-feedback').textContent = flow(importing ? 'csv_import_progress' : 'csv_progress', [index + 1, inventoryRows.length]);
-      try {
-        if (!importing) {
-          row.result = await request('/api/remote/check', { method: 'POST', body: new URLSearchParams({ target: row.target }) }, true);
-          if (!row.result.token) throw new Error(row.result.error || flow('csv_no_certificate'));
-        } else {
-          // Snapshots expire after ten minutes: always refresh immediately before explicit import.
-          const checkedFingerprint = row.result.certificate && row.result.certificate.fingerprint;
-          row.result = await request('/api/remote/check', { method: 'POST', body: new URLSearchParams({ target: row.target }) }, true);
-          if (!row.result.token) throw new Error(row.result.error || flow('csv_no_certificate'));
-          if (checkedFingerprint && (!row.result.certificate || checkedFingerprint !== row.result.certificate.fingerprint)) throw new Error(flow('csv_certificate_changed'));
-          failureField = '';
-          const body = new URLSearchParams({ token: row.result.token });
-          const imported = await request('/api/remote/import', { method: 'POST', body });
-          if (imported.monitoring_error) throw new Error(imported.monitoring_error);
-          if (row.contacts.length && imported.certificate_id) {
-            await refresh(true);
-            const current = state.certificates.find(cert => String(cert.id) === String(imported.certificate_id));
-            const contacts = new Map((current && current.contacts || []).map(contact => [`${contact.role}:${contact.email.toLowerCase()}`, contact]));
-            for (const contact of row.contacts) contacts.set(`${contact.role}:${contact.email.toLowerCase()}`, contact);
-            const assignments = new URLSearchParams();
-            for (const contact of contacts.values()) { assignments.append('role', contact.role); assignments.append('name', contact.name || ''); assignments.append('email', contact.email); }
-            await request(`/api/certificates/${encodeURIComponent(imported.certificate_id)}/contacts`, { method: 'PUT', body: assignments });
-          }
-          row.imported = true;
-        }
-      } catch (error) { row.error = error.message; row.runtimeErrorField = failureField; }
-      renderInventory();
-    }
-    inventoryRunning = false;
-    byId('inventory-feedback').textContent = inventoryStopped ? flow('csv_stopped') : flow('csv_done');
-    renderInventory();
-    if (importing) await refresh(true);
+    try {
+      if(importing && inventoryBatchId)await window.CertificateInventoryUI.reviewBatch(await window.CertificateInventoryUI.current(inventoryBatchId));
+      else {inventoryBatchData=await window.CertificateInventoryUI.prepare(selected);inventoryBatchId=inventoryBatchData.id;window.dispatchEvent(new CustomEvent('certificate-batch-update',{detail:await window.CertificateInventoryUI.current(inventoryBatchId)}));byId('inventory-feedback').textContent=flow('x_background_help');}
+    }catch(error){byId('inventory-feedback').textContent=error.message;}
+    finally{inventoryRunning=false;renderInventory();}
+  }
+  const inventoryFields=['url','business_name','business_email','technical_name','technical_email'];
+  function inventoryCanonical(rows) { return inventoryFields.join(',')+'\r\n'+rows.map(row=>inventoryFields.map(field=>'"'+String(row.values[field]||'').replace(/"/g,'""')+'"').join(',')).join('\r\n')+'\r\n'; }
+  async function editInventoryRow(row) {
+    if(!window.CertificateUI)return;const content=element('div','workflow-form-grid');const inputs={};
+    for(const field of inventoryFields){const input=formField(field,'text',row.values[field],{maxLength:16000});inputs[field]=input.input;content.append(input.wrapper);}
+    if(row.extraValues?.length)content.append(element('p','import-chain-warning',flow('x_extra_removed',[row.extraValues.join(', ')])));
+    if(!await window.CertificateUI.modal(flow('x_edit_row')+' '+row.line,content,flow('x_save_correction')))return;
+    const values=Object.fromEntries(inventoryFields.map(field=>[field,inputs[field].value]));
+    const corrected=parseInventoryCSV(inventoryCanonical([{values}]))[0];Object.assign(row,corrected,{line:row.line,selected:row.selected});
+    inventoryBatchId=null;inventoryBatchData=null;inventoryMapping=null;inventoryDelimiter=',';byId('inventory-delimiter').value=',';byId('inventory-map-fields')?.remove?.();byId('inventory-file').value='';byId('inventory-text').value=inventoryCanonical(inventoryRows);byId('inventory-feedback').textContent=flow('csv_validated',[inventoryRows.length]);renderInventory();
+  }
+  function initializeInventoryTools() {
+    if(currentPage!=='import')return;const mapping=byId('inventory-mapping');const label=element('label','workflow-form-field',flow('x_delimiter'));const delimiter=element('select');
+    delimiter.id='inventory-delimiter';for(const [value,key] of [[',','comma'],[';','semicolon'],['\t','tab']])appendOption(delimiter,value,flow('x_'+key));label.append(delimiter);mapping.append(label);
+    const inspect=action(flow('x_map_columns'),()=>{
+      try{const headers=parseInventoryCSV(byId('inventory-text').value,{delimiter:delimiter.value,headersOnly:true});const controls=element('div','workflow-form-grid');
+        const selects=headers.map((header,index)=>{const label=element('label','workflow-form-field',header||String(index+1));const select=element('select');appendOption(select,'',flow('x_ignore_column'));for(const field of inventoryFields)appendOption(select,field,field);select.value=inventoryFields.includes(header.trim().toLowerCase())?header.trim().toLowerCase():'';label.append(select);controls.append(label);return select;});
+        controls.append(action(flow('x_apply_mapping'),()=>{inventoryMapping=selects.map(select=>select.value);inventoryDelimiter=delimiter.value;previewInventory();}));const old=byId('inventory-map-fields');if(old)old.remove();controls.id='inventory-map-fields';mapping.append(controls);
+      }catch(error){byId('inventory-feedback').textContent=error.message;}
+    });mapping.append(inspect);
+    delimiter.addEventListener('change',()=>{inventoryDelimiter=delimiter.value;inventoryMapping=null;inventoryRows=[];inventoryBatchId=null;inventoryBatchData=null;renderInventory();});
+    const tools=byId('inventory-tools');tools.append(action(flow('x_select_valid'),()=>{inventoryBatchId=null;inventoryBatchData=null;for(const row of inventoryRows)row.selected=!(row.errors||[]).length&&!row.imported;renderInventory();}),action(flow('x_corrected_csv'),()=>window.CertificateUI?.download('certificate-manager-corretto.csv','\uFEFF'+inventoryCanonical(inventoryRows))),action(flow('x_report'),()=>{
+      const headers=['line',...inventoryFields,'status','error'];const rows=inventoryRows.map(row=>[row.line,...inventoryFields.map(field=>row.values[field]),row.imported?'imported':row.error?'error':'valid',row.error]);const csv=[headers,...rows].map(row=>row.map(value=>window.CertificateInventoryUI.csvCell(value,true)).join(',')).join('\r\n');window.CertificateUI.download('certificate-manager-esiti.csv','\uFEFF'+csv);
+    }));
+    window.addEventListener('certificate-batch-update',event=>{const batch=event.detail;if(String(batch.id)!==String(inventoryBatchId))return;inventoryBatchData=batch;for(const result of batch.rows||[]){const row=inventoryRows.find(row=>row.line===result.line);if(!row)continue;row.batchRowId=result.id;row.plan=result.plan;row.error=result.error||'';row.imported=result.status==='imported';if(result.plan)row.result={certificate:result.plan.certificate,verified:true};}renderInventory();});
   }
   function jobStatusLabel(value) { return flow(`job_${value || 'requested'}`); }
   function dateInputValue(value) {
@@ -2214,7 +2228,16 @@
     if (cert.is_ca) { container.append(element('p', 'workflow-help', flow('ca_no_case'))); return; }
     container.append(element('p', 'workflow-help', flow('overlap_help')));
     const jobs = (state.renewal_jobs || []).filter(job => String(job.old_certificate_id) === String(cert.id) || String(job.new_certificate_id) === String(cert.id));
-    const job = jobs.find(item => !item.finished_at) || jobs[0];
+    const chosen = selectedRenewalJobs.get(String(cert.id));
+    const job = chosen === 'new' ? null : jobs.find(item => String(item.id) === chosen) || jobs.find(item => !item.finished_at) || jobs[0];
+    if (jobs.length) {
+      const label = element('label', 'workflow-form-field', flow('x_all_cases'));
+      const select = element('select');
+      for(const item of jobs) appendOption(select,item.id,`${flow('case_number',[item.id])} · ${jobStatusLabel(item.status)} · ID ${item.old_certificate_id} → ${item.new_certificate_id || '—'}`);
+      appendOption(select,'new',flow('create_case'));select.value = job ? String(job.id) : 'new';
+      select.addEventListener('change',()=>{ if(workflowDirty){select.value=job?String(job.id):'new';message(flow('save_current_form'),true);return;}selectedRenewalJobs.set(String(cert.id),select.value);renderRenewalCase(cert); });
+      label.append(select);container.append(label);
+    }
     const summary = element('div', 'process-summary');
     summary.append(element('span', 'operational-badge', operationalLabel(cert)));
     if (job) {
@@ -2249,6 +2272,7 @@
         appendOption(candidate, replacement.id, `${name(replacement)} · ID ${replacement.id} · ${date(replacement.not_after)}`);
       }
       candidateLabel.append(candidate); form.append(candidateLabel);
+      if(window.CertificateEnhancements) window.CertificateEnhancements.compareChoice(form,predecessor,candidate);
       form.replacementSelector = candidate;
     }
     const save = element('button', 'button button-primary', job ? flow('save_case') : flow('create_case'));
@@ -2264,7 +2288,7 @@
       workflowRequest(job ? `/api/renewal-jobs/${encodeURIComponent(job.id)}` : '/api/renewal-jobs', job ? 'PUT' : 'POST', body, detailFeedback, form);
     });
     container.append(form);
-    if (!job || !job.new_certificate_id) return;
+    if (!job || !job.new_certificate_id) {if(job&&window.CertificateEnhancements)window.CertificateEnhancements.renewal(container,job,null);return;}
     const endpoints = (state.renewal_endpoints || []).filter(endpoint => String(endpoint.job_id) === String(job.id));
     const endpointList = element('ul', 'deployment-endpoints');
     for (const endpoint of endpoints) {
@@ -2280,6 +2304,7 @@
     }
     container.append(element('h4', '', flow('deployment_title')), element('p', 'workflow-help', flow('deployment_help')), endpointList);
     const actions = element('div', 'action-row');
+    let completeButton = null;
     if (!endpoints.length) {
       container.append(element('p', 'import-chain-warning', flow('no_endpoints')));
       const retire = action(flow('retire_manual'), () => {
@@ -2290,11 +2315,13 @@
     } else {
       const check = action(flow('verify_all'), () => workflowRequest(`/api/renewal-jobs/${encodeURIComponent(job.id)}/check-install`, 'POST', new URLSearchParams({ monitor_id: '0' })));
       const complete = action(flow('complete_case'), () => workflowRequest(`/api/renewal-jobs/${encodeURIComponent(job.id)}/complete`, 'POST', new URLSearchParams()), true);
+      completeButton = complete;
       check.disabled = !!job.finished_at;
-      complete.disabled = !!job.finished_at || endpoints.some(endpoint => !endpoint.verified_at);
+      complete.disabled = true;
       actions.append(check, complete);
     }
     container.append(actions);
+    if(window.CertificateEnhancements) window.CertificateEnhancements.renewal(container,job,completeButton);
   }
   function renderReminderPolicy(cert) {
     const container = byId('policy-content');
@@ -2320,6 +2347,7 @@
       workflowRequest(`/api/certificates/${encodeURIComponent(cert.id)}/reminder-policy`, 'PUT', new URLSearchParams({ thresholds: thresholds.input.value.trim(), enabled: checkbox.checked ? '1' : '0', escalation_email: escalationEmail.input.value.trim(), escalation_name: escalationName.input.value.trim(), escalation_after_days: delay.input.value }), detailFeedback, form);
     });
     container.replaceChildren(form);
+    if(window.CertificateEnhancements) window.CertificateEnhancements.reminderPreview(form,cert,() => new URLSearchParams({certificate_id: cert.id,thresholds:thresholds.input.value.trim(),enabled:checkbox.checked?'1':'0',escalation_email:escalationEmail.input.value.trim(),escalation_name:escalationName.input.value.trim(),escalation_after_days:delay.input.value}));
   }
   function renderDirectoryAssignment(cert) {
     const container = byId('directory-assign-content');
@@ -2375,6 +2403,7 @@
       const body = new URLSearchParams({ name: personName.input.value.trim(), email: personEmail.input.value.trim() });
       for (const checkbox of personChoices.querySelectorAll('input:checked')) body.append('group_id', checkbox.value);
       const id = directoryEditingPerson;
+      if(id && window.CertificateEnhancements && !await window.CertificateEnhancements.directoryReview('person',id,body)) return;
       if (await workflowRequest(id ? `/api/people/${encodeURIComponent(id)}` : '/api/people', id ? 'PUT' : 'POST', body, feedback, personForm)) { discardWorkflowDraft(); }
     });
     peoplePanel.append(personForm);
@@ -2390,7 +2419,7 @@
       });
       const remove = action(flow('remove'), async () => {
         if (workflowDirty) { message(flow('save_current_form'), true); return; }
-        if (!window.confirm(flow('delete_person_confirm', [person.email]))) return;
+        if (window.CertificateEnhancements ? !await window.CertificateEnhancements.directoryReview('person',person.id) : !window.confirm(flow('delete_person_confirm',[person.email]))) return;
         await workflowRequest(`/api/people/${encodeURIComponent(person.id)}`, 'DELETE', new URLSearchParams(), feedback);
       });
       item.append(info, edit, remove); people.append(item);
@@ -2414,6 +2443,7 @@
       const body = new URLSearchParams({ name: groupName.input.value.trim() });
       for (const checkbox of members.querySelectorAll('input:checked')) body.append('person_id', checkbox.value);
       const id = directoryEditingGroup;
+      if(id && window.CertificateEnhancements && !await window.CertificateEnhancements.directoryReview('group',id,body)) return;
       if (await workflowRequest(id ? `/api/groups/${encodeURIComponent(id)}` : '/api/groups', id ? 'PUT' : 'POST', body, feedback, groupForm)) { discardWorkflowDraft(); }
     });
     groupPanel.append(groupForm);
@@ -2428,7 +2458,7 @@
       });
       const remove = action(flow('remove'), async () => {
         if (workflowDirty) { message(flow('save_current_form'), true); return; }
-        if (!window.confirm(flow('delete_group_confirm', [group.name]))) return;
+        if (window.CertificateEnhancements ? !await window.CertificateEnhancements.directoryReview('group',group.id) : !window.confirm(flow('delete_group_confirm',[group.name]))) return;
         await workflowRequest(`/api/groups/${encodeURIComponent(group.id)}`, 'DELETE', new URLSearchParams(), feedback);
       });
       item.append(info, edit, remove); groups.append(item);
@@ -2517,6 +2547,8 @@
     inventoryReading = false;
     byId('inventory-file').value = '';
     inventoryRows = [];
+    inventoryMapping=null; inventoryBatchId=null; inventoryBatchData=null;
+    byId('inventory-map-fields')?.remove?.();
     byId('inventory-feedback').textContent = '';
     renderInventory();
   });
@@ -2524,12 +2556,14 @@
   on('add-preview-chain', 'click', () => byId('preview-chain-files').click());
   on('inventory-check', 'click', () => runInventory(false));
   on('inventory-import', 'click', () => runInventory(true));
-  on('inventory-cancel', 'click', () => { inventoryStopped = true; });
+  on('inventory-cancel', 'click', async () => { inventoryStopped = true; if(inventoryBatchId)try{await request(`/api/inventory/batches/${inventoryBatchId}/pause`,{method:'POST',body:new URLSearchParams()});}catch(error){message(error.message,true);} });
   on('inventory-file', 'change', async event => {
     if (inventoryRunning) return;
     const generation = ++inventoryReadGeneration;
     const file = event.target.files[0];
     inventoryRows = [];
+    inventoryMapping=null; inventoryBatchId=null; inventoryBatchData=null;
+    byId('inventory-map-fields')?.remove?.();
     byId('inventory-text').value = '';
     byId('inventory-feedback').textContent = '';
     inventoryReading = !!file && file.size <= 1024 * 1024;
@@ -2557,6 +2591,8 @@
     if (workflowDirty || importDrafts.length || inventoryRunning) { event.preventDefault(); event.returnValue = ''; }
   });
   initializeWorkflow();
+  window.CertificateCore = {request,refresh,element,action,formField,appendOption,flow,msg,date,name,showDetails,workflowRequest,importRemote,getState:()=>state,currentPage,byId,message,renderRenewalCase,getDetails:()=>detailsCertificate,openRenewalCase:(cert,jobId)=>{selectedRenewalJobs.set(String(cert.id),String(jobId));showDetails(cert);}};
+  initializeInventoryTools();
   if (currentPage === 'import') renderInventory();
   restoreRegistryFilters();
   restoreDesktopPreference();

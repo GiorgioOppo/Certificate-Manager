@@ -27,6 +27,7 @@ def database(path):
 def legacy_layout(connection, version):
     """Recreate empty v3/v4 tables using their historical DDL (SQLite >=3.24)."""
     assert version in (3, 4)
+    core.remove_workflow_v6(connection)
     for table in ("directory_assignments", "certificate_groups", "directory_memberships",
                   "directory_groups", "directory_people", "renewal_endpoints", "renewal_jobs",
                   "reminder_policies", "monitor_recipients"):
@@ -256,14 +257,14 @@ class SmtpSettingsTests(unittest.TestCase):
         self.stop_server()
         now = 1800000000
         with database(self.db) as connection:
-            # Changing user_version alone would leave v5 additions behind.
+            # Rebuild the historical schema, removing both v5 and v6 additions.
             legacy_layout(connection, 3)
             legacy_records(connection, now)
         tables = ("certificates", "contacts", "notifications", "outbox", "monitors", "monitor_events")
         columns = {table: [row["name"] for row in self.rows(f"PRAGMA table_info({table})")] for table in tables}
         before = {table: self.rows(f"SELECT * FROM {table} ORDER BY rowid") for table in tables}
         self.start()
-        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 5)
+        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 6)
         self.assertEqual(self.state()["smtp"]["source"], "none")
         for table in tables:
             legacy_columns = ",".join(columns[table])
@@ -291,7 +292,7 @@ class SmtpSettingsTests(unittest.TestCase):
         columns = {table: [row["name"] for row in self.rows(f"PRAGMA table_info({table})")] for table in tables}
         before = {table: self.rows(f"SELECT * FROM {table} ORDER BY rowid") for table in tables}
         self.start()
-        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 5)
+        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 6)
         for table in tables:
             self.assertEqual(self.rows(f"SELECT {','.join(columns[table])} FROM {table} ORDER BY rowid"), before[table], table)
         self.assertEqual(self.key_path().read_bytes(), key_before)

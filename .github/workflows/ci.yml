@@ -27,7 +27,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends --yes build-essential pkg-config libssl-dev libsqlite3-dev libcurl4-openssl-dev openssl python3
       - name: Check interface JavaScript
-        run: node --check web/app.js
+        run: |
+          node --check web/app.js
+          node --check web/extensions.js
+          node --check web/operations-ui.js
+          node --check web/incidents-ui.js
       - name: Build and run tests
         run: make test
 
