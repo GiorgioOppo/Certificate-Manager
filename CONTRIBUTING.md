@@ -8,7 +8,7 @@ Build the application using the dependencies and commands in [README.md](README.
 - `web/`: shared HTML, CSS, JavaScript and language resources.
 - `scripts/embed_assets.py`: generates the seven page documents and embeds interface assets during the build.
 - `tests/`: C unit tests and Python integration tests.
-- `docs/`: detailed Italian documentation and publication guidance.
+- `docs/`: workflow explanations in English and Italian, the Italian user guide, translation and publication guidance.
 
 The executable embeds the web interface. Rebuild with `make` after changing web assets and restart the application to load the updated executable. Keep the local-only server model, existing Host/Origin/CSRF protections and strict TLS verification intact.
 
@@ -18,7 +18,7 @@ Describe the problem, resulting behavior and checks performed in your pull reque
 
 When changing visible text, update all six interface languages and verify placeholders remain consistent. Check affected pages at wide and narrow widths, including empty states and errors. Do not translate API field names, stored certificate subjects, user names, addresses or URLs.
 
-Keep [README.md](README.md) and the [Italian guide](docs/README.it.md) consistent when changing setup or behavior. Contributions are distributed under the project's [MIT license](LICENSE).
+Keep [README.md](README.md), the [Italian guide](docs/README.it.md) and the workflow explanations in [English](docs/WORKFLOW.md) and [Italian](docs/WORKFLOW.it.md) consistent when changing setup or behavior. Contributions are distributed under the project's [MIT license](LICENSE).
 
 ## Sensitive information
 

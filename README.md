@@ -4,7 +4,7 @@ A local HTTPS certificate registry written in C, with a multilingual web interfa
 
 [GitHub repository](https://github.com/GiorgioOppo/Certificate-Manager)
 
-[Guida completa in italiano](docs/README.it.md) · [Translations](docs/TRANSLATING.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Publishing to GitHub](docs/PUBLISHING.md)
+[Guida completa in italiano](docs/README.it.md) · [Workflow](docs/WORKFLOW.md) · [Workflow in italiano](docs/WORKFLOW.it.md) · [Translations](docs/TRANSLATING.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Publishing to GitHub](docs/PUBLISHING.md)
 
 ## Features
 
@@ -19,6 +19,28 @@ A local HTTPS certificate registry written in C, with a multilingual web interfa
 - Use the interface in **English, Italian, French, Spanish, Simplified Chinese or Japanese**.
 
 This is a local application. The HTTP server binds to **127.0.0.1** and has no user authentication or access roles. Publishing the source on GitHub does not make it a hosted service. See [Security](SECURITY.md) before considering network exposure.
+
+## Workflow
+
+```mermaid
+flowchart TD
+    Files["Public certificate files"] --> Registry["Certificate registry and contacts"]
+    Endpoint["HTTPS URL or hostname"] --> Check["DNS, TCP and TLS verification"]
+    Check -->|Explicit import| Registry
+    Registry --> Expiry["Expiry checks: 45, 30, 15, 2 and 0 days"]
+    Expiry --> Queue["Email queue"]
+    Registry --> Monitor["Periodic endpoint monitoring"]
+    Monitor --> Alerts["Service alerts in the interface"]
+    Registry --> Renewal["Upload the signed renewal from your CA"]
+    Renewal -->|Archive old entry; transfer contacts and monitors| Registry
+    Renewal -->|Public certificate and chain for technical contacts| Queue
+    Queue -->|SMTP configured and enabled| SMTP["SMTP server"]
+    SMTP --> People["Business and technical contacts"]
+```
+
+Import a public certificate, assign contacts, and associate the HTTPS endpoints to monitor. The backend stores data in SQLite, checks expiry dates, compares live certificates with the registry, and prepares messages. Business contacts receive expiry reminders; technical contacts receive the signed renewal and available chain, then install it on the service themselves. Monitoring alerts are shown in the interface and do not generate email.
+
+The program must keep running for periodic checks and delivery. Without an enabled SMTP configuration, messages remain in the queue. See the [complete workflow](docs/WORKFLOW.md) or the [Italian explanation](docs/WORKFLOW.it.md) for component communication, timing, renewal steps and an operational example.
 
 ## Build and run
 

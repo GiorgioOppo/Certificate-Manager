@@ -1,6 +1,6 @@
 # Certificate Manager — guida italiana
 
-[English overview](../README.md) · [Licenza MIT](../LICENSE) · [Pubblicazione su GitHub](PUBLISHING.md)
+[English overview](../README.md) · [Workflow spiegato](WORKFLOW.it.md) · [Licenza MIT](../LICENSE) · [Pubblicazione su GitHub](PUBLISHING.md)
 
 Programma in C con interfaccia web e archivio SQLite locale. Importa certificati X.509, estrae i dati utili, segue le scadenze e gestisce più referenti per ogni certificato. I promemoria sono previsti a **45, 30, 15 e 2 giorni**, più un avviso alla scadenza.
 
@@ -9,6 +9,14 @@ La pagina **Coda email** consente di configurare SMTP, verificare la connessione
 L’interfaccia è disponibile in **inglese, italiano, francese, spagnolo, cinese semplificato e giapponese**. Scegli la lingua dal selettore nell’interfaccia. I dati dei certificati, i nomi dei referenti e gli altri contenuti inseriti dall’utente mantengono la propria forma originale. I comandi da terminale e i testi dei messaggi email generati rimangono in italiano.
 
 Il progetto usa la licenza **MIT** ed è predisposto per la pubblicazione del codice sorgente su GitHub come **Certificate Manager**. Il server resta uno strumento locale senza autenticazione utenti: ascolta su `127.0.0.1` e non è pronto per l’esposizione diretta in rete. Vedi [SECURITY.md](../SECURITY.md) e la [guida alla pubblicazione](PUBLISHING.md).
+
+## Workflow
+
+Il percorso operativo è: **acquisizione del certificato → registro e referenti → controlli di scadenza e degli URL → rinnovo → distribuzione ai tecnici → installazione sul servizio e verifica**.
+
+Il browser dialoga con le API del backend C, che legge e aggiorna SQLite. Il backend esegue i controlli periodici, interroga i servizi HTTPS e prepara la coda email. Le scadenze producono messaggi per i referenti; i rinnovi producono allegati PEM per i tecnici; le anomalie dei servizi restano visibili nell’interfaccia. I tecnici installano il certificato sul servizio esternamente al programma.
+
+La [spiegazione completa del workflow](WORKFLOW.it.md) contiene i diagrammi dei componenti e del rinnovo, le frequenze, i ruoli e un esempio operativo. È disponibile anche [in inglese](WORKFLOW.md).
 
 ## Installazione e avvio
 
