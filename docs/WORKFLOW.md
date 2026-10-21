@@ -7,17 +7,15 @@ Certificate Manager follows a certificate from acquisition to renewal and checks
 ## How the components communicate
 
 ```mermaid
-flowchart LR
-    User["Operator in the web browser"] -->|Local HTTP API| Backend["C backend"]
-    Backend -->|JSON state and results| User
+flowchart TD
+    User["Operator in the browser"] <-->|Local HTTP and JSON| Backend["C backend"]
     Files["Public PEM or DER files"] -->|Upload| Backend
-    Backend <-->|Certificates, contacts, history and queue| DB[("SQLite database")]
-    Backend -->|Parse certificates and reconstruct chains| X509["OpenSSL"]
-    Backend -->|Due checks| Monitor["TLS monitoring worker"]
-    Monitor <-->|DNS, TCP and TLS| Services["HTTPS services"]
-    Monitor -->|Observed certificate and diagnostics| Backend
-    Backend -->|Pending messages when delivery is enabled| Mail["SMTP delivery via libcurl"]
-    Mail -->|STARTTLS or implicit TLS| SMTP["Configured SMTP server"]
+    Backend <-->|Read and write| DB[("SQLite database")]
+    Backend -->|Parse X.509| X509["OpenSSL"]
+    Backend <-->|Schedule and results| Monitor["TLS monitoring worker"]
+    Monitor <-->|DNS, TCP, TLS| Services["HTTPS services"]
+    Backend -->|Queued messages| Mail["Email delivery via libcurl"]
+    Mail -->|TLS| SMTP["Configured SMTP server"]
     SMTP --> Contacts["Business and technical contacts"]
 ```
 
@@ -79,26 +77,26 @@ All periodic work needs a running process. `serve` also provides the web interfa
 ```mermaid
 sequenceDiagram
     actor Operator
-    participant App as Web UI and C backend
+    participant App as UI and C backend
     participant DB as SQLite registry
     participant SMTP as SMTP server
     actor Technician
     participant Service as HTTPS service
     participant Monitor as Periodic monitor
-    Operator->>App: Upload CA-signed renewal from old certificate details
-    App->>App: Validate identities, dates and certificate type
-    App->>DB: Link renewal, archive old entry, transfer contacts and monitors
-    App->>DB: Queue public PEM and available chain for technical contacts
+    Operator->>App: Upload signed renewal
+    App->>App: Validate renewal
+    App->>DB: Link renewal and transfer assignments
+    App->>DB: Queue public PEM for technical contacts
     alt SMTP configured and delivery enabled
-        App->>SMTP: Process queued message over TLS
-        SMTP-->>Technician: Renewal email with PEM attachment
+        App->>SMTP: Send message over TLS
+        SMTP-->>Technician: Email with public PEM
     else Delivery unavailable or paused
-        App->>DB: Keep message queued for review
+        App->>DB: Keep message queued
     end
-    Technician->>Service: Install renewal using external deployment tools
-    Monitor->>Service: Retrieve certificate at next scheduled check
-    Service-->>Monitor: Certificate actually presented
-    Monitor->>DB: Save comparison with renewed registry entry
+    Technician->>Service: Install renewal with external tools
+    Monitor->>Service: Run next scheduled check
+    Service-->>Monitor: Presented certificate
+    Monitor->>DB: Save comparison result
 ```
 
 Obtain the signed renewal from your CA first. In the **old certificate's details**, use the renewal upload action. The file must contain one leaf certificate, optionally with CA certificates. The leaf must already be valid, expire later than the predecessor and preserve its DNS/IP identities; the CN is used as a fallback when no DNS/IP SAN identities are present.

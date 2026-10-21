@@ -32,8 +32,8 @@ flowchart TD
     Registry --> Monitor["Periodic endpoint monitoring"]
     Monitor --> Alerts["Service alerts in the interface"]
     Registry --> Renewal["Upload the signed renewal from your CA"]
-    Renewal -->|Archive old entry; transfer contacts and monitors| Registry
-    Renewal -->|Public certificate and chain for technical contacts| Queue
+    Renewal -->|Link renewal and transfer assignments| Registry
+    Renewal -->|Public PEM for technical contacts| Queue
     Queue -->|SMTP configured and enabled| SMTP["SMTP server"]
     SMTP --> People["Business and technical contacts"]
 ```

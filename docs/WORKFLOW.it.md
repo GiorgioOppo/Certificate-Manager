@@ -7,17 +7,15 @@ Certificate Manager segue il certificato dall'acquisizione al rinnovo e controll
 ## Come dialogano i componenti
 
 ```mermaid
-flowchart LR
-    User["Operatore nel browser"] -->|API HTTP locali| Backend["Backend C"]
-    Backend -->|Stato e risultati in JSON| User
+flowchart TD
+    User["Operatore nel browser"] <-->|HTTP locale e JSON| Backend["Backend C"]
     Files["File pubblici PEM o DER"] -->|Caricamento| Backend
-    Backend <-->|Certificati, referenti, storico e coda| DB[("Database SQLite")]
-    Backend -->|Lettura certificati e ricostruzione catene| X509["OpenSSL"]
-    Backend -->|Controlli in scadenza| Monitor["Processo di monitoraggio TLS"]
-    Monitor <-->|DNS, TCP e TLS| Services["Servizi HTTPS"]
-    Monitor -->|Certificato osservato e diagnostica| Backend
-    Backend -->|Messaggi in attesa con invio abilitato| Mail["Invio SMTP con libcurl"]
-    Mail -->|STARTTLS o TLS implicito| SMTP["Server SMTP configurato"]
+    Backend <-->|Lettura e scrittura| DB[("Database SQLite")]
+    Backend -->|Lettura X.509| X509["OpenSSL"]
+    Backend <-->|Controlli ed esiti| Monitor["Processo di monitoraggio TLS"]
+    Monitor <-->|DNS, TCP, TLS| Services["Servizi HTTPS"]
+    Backend -->|Messaggi in coda| Mail["Invio email con libcurl"]
+    Mail -->|TLS| SMTP["Server SMTP configurato"]
     SMTP --> Contacts["Referenti e referenti tecnici"]
 ```
 
@@ -79,26 +77,26 @@ Tutte le attività periodiche richiedono un processo in esecuzione. `serve` offr
 ```mermaid
 sequenceDiagram
     actor Operatore
-    participant App as Interfaccia web e backend C
+    participant App as UI e backend C
     participant DB as Registro SQLite
     participant SMTP as Server SMTP
     actor Tecnico
     participant Servizio as Servizio HTTPS
     participant Monitor as Monitor periodico
-    Operatore->>App: Carica il rinnovo firmato dalla CA dal dettaglio del vecchio certificato
-    App->>App: Verifica identità, date e tipo di certificato
-    App->>DB: Collega rinnovo, archivia il vecchio, trasferisce referenti e monitor
-    App->>DB: Prepara PEM pubblico e catena disponibile in coda per i tecnici
+    Operatore->>App: Carica rinnovo firmato
+    App->>App: Valida rinnovo
+    App->>DB: Collega rinnovo e trasferisce assegnazioni
+    App->>DB: Prepara PEM pubblico in coda per i tecnici
     alt SMTP configurato e invio abilitato
-        App->>SMTP: Elabora il messaggio in coda tramite TLS
-        SMTP-->>Tecnico: Email di rinnovo con allegato PEM
+        App->>SMTP: Invia messaggio tramite TLS
+        SMTP-->>Tecnico: Email con PEM pubblico
     else Invio non disponibile o in pausa
-        App->>DB: Mantiene il messaggio in attesa di revisione
+        App->>DB: Mantiene messaggio in coda
     end
-    Tecnico->>Servizio: Installa il rinnovo con strumenti esterni di distribuzione
-    Monitor->>Servizio: Recupera il certificato al prossimo controllo
-    Servizio-->>Monitor: Certificato effettivamente esposto
-    Monitor->>DB: Salva il confronto con la nuova voce del registro
+    Tecnico->>Servizio: Installa rinnovo con strumenti esterni
+    Monitor->>Servizio: Esegue prossimo controllo
+    Servizio-->>Monitor: Certificato esposto
+    Monitor->>DB: Salva esito del confronto
 ```
 
 Prima ottieni dalla CA il certificato firmato. Nel **dettaglio del vecchio certificato** usa l'azione per caricare il rinnovo. Il file deve contenere un certificato finale, oltre alle eventuali CA. Deve essere già valido, scadere dopo il precedente e mantenere le sue identità DNS/IP; in assenza di identità DNS/IP nei SAN si usa il CN come confronto.
