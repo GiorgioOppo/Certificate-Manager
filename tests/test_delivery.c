@@ -13,6 +13,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #define REQUIRE(condition) do { if (!(condition)) { \
@@ -552,12 +553,20 @@ static int write_smtp(int socket_fd, SSL *tls, const char *text)
 
 /* Receives only connection setup: greeting, STARTTLS, AUTH and optional QUIT.
    The child fails if libcurl sends any envelope or message command. */
+static void probe_stage(int diagnostic_fd, char stage)
+{
+    /* Progress only: never record SMTP AUTH data or credentials. */
+    (void)write(diagnostic_fd, &stage, 1);
+}
+
 static void fake_tls_probe(int listener, SSL_CTX *context, int starttls, int reject_auth,
-                            int untrusted)
+                            int untrusted, int diagnostic_fd)
 {
     alarm(8);
+    probe_stage(diagnostic_fd, '0');
     int client = accept(listener, NULL, NULL);
     if (client < 0) _exit(10);
+    probe_stage(diagnostic_fd, '1');
     char line[2048];
     if (starttls) {
         if (!write_smtp(client, NULL, "220 localhost test server\r\n") ||
@@ -568,7 +577,9 @@ static void fake_tls_probe(int listener, SSL_CTX *context, int starttls, int rej
     }
     SSL *tls = SSL_new(context);
     if (!tls || !SSL_set_fd(tls, client)) _exit(12);
+    probe_stage(diagnostic_fd, '2');
     int connected = SSL_accept(tls);
+    probe_stage(diagnostic_fd, '3');
     if (untrusted) {
         /* Depending on TLS implementation the peer may close just after the
            handshake; in either case no SMTP command may follow. */
@@ -577,9 +588,11 @@ static void fake_tls_probe(int listener, SSL_CTX *context, int starttls, int rej
     }
     if (connected != 1) _exit(14);
     if (!starttls && !write_smtp(client, tls, "220 localhost test server\r\n")) _exit(15);
+    probe_stage(diagnostic_fd, '4');
     if (!read_smtp_line(client, tls, line, sizeof line) || strncmp(line, "EHLO ", 5) ||
         !write_smtp(client, tls, "250-localhost\r\n250 AUTH PLAIN\r\n") ||
         !read_smtp_line(client, tls, line, sizeof line)) _exit(16);
+    probe_stage(diagnostic_fd, '5');
     if (strncmp(line, "AUTH PLAIN", 10)) _exit(17);
     char *encoded = line + 10;
     while (*encoded == ' ') ++encoded;
@@ -599,11 +612,14 @@ static void fake_tls_probe(int listener, SSL_CTX *context, int starttls, int rej
     static const unsigned char expected[] = "\0smtp-test\0probe-secret";
     if (decoded != (int)sizeof expected - 1 || memcmp(credentials, expected, sizeof expected - 1)) _exit(21);
     memset(credentials, 0, sizeof credentials);
+    probe_stage(diagnostic_fd, '6');
     if (!write_smtp(client, tls, reject_auth ? "535 Authentication rejected\r\n" : "235 Authentication successful\r\n")) _exit(22);
+    probe_stage(diagnostic_fd, '7');
     if (read_smtp_line(client, tls, line, sizeof line)) {
         if (strcmp(line, "QUIT\r\n")) _exit(23);
         (void)write_smtp(client, tls, "221 Bye\r\n");
     }
+    probe_stage(diagnostic_fd, '8');
     SSL_free(tls); close(client); close(listener); _exit(0);
 }
 
@@ -655,9 +671,18 @@ static void test_connection_probe_tls_and_auth_without_email(void)
         REQUIRE(getsockname(listener, (struct sockaddr *)&address, &size) == 0);
         int starttls = scenario == 1;
         int reject_auth = scenario == 2, untrusted = scenario == 3;
+        int diagnostics[2];
+        REQUIRE(pipe(diagnostics) == 0);
         pid_t child = fork();
         REQUIRE(child >= 0);
-        if (!child) fake_tls_probe(listener, tls_context, starttls, reject_auth, untrusted);
+        if (!child) {
+            close(diagnostics[0]);
+            fake_tls_probe(listener, tls_context, starttls, reject_auth, untrusted, diagnostics[1]);
+        }
+        close(diagnostics[1]);
+        struct timespec probe_begin, probe_end;
+        REQUIRE(clock_gettime(CLOCK_MONOTONIC, &probe_begin) == 0);
+        error[0] = 0;
         if (untrusted) REQUIRE(unsetenv("CERTIFICATI_SMTP_CA_FILE") == 0);
         else REQUIRE(setenv("CERTIFICATI_SMTP_CA_FILE", ca_path, 1) == 0);
         SmtpSettings draft = {
@@ -685,10 +710,26 @@ static void test_connection_probe_tls_and_auth_without_email(void)
             REQUIRE(scalar(&store, "SELECT count(*) FROM outbox") == 0);
             store_close(&store);
         } else connected = delivery_test_connection(&draft, error, sizeof error);
-        REQUIRE(connected == (!reject_auth && !untrusted));
-        REQUIRE(!strstr(error, "probe-secret"));
+        REQUIRE(clock_gettime(CLOCK_MONOTONIC, &probe_end) == 0);
+        /* Reap before asserting, so failures include the fixture's outcome
+         * instead of abandoning a child blocked in TLS/AUTH. */
         int status;
         REQUIRE(waitpid(child, &status, 0) == child);
+        char stages[64]; size_t stage_count = 0; ssize_t got;
+        while (stage_count + 1 < sizeof stages &&
+               (got = read(diagnostics[0], stages + stage_count, sizeof stages - stage_count - 1)) > 0)
+            stage_count += (size_t)got;
+        stages[stage_count] = 0;
+        close(diagnostics[0]);
+        double elapsed = (double)(probe_end.tv_sec - probe_begin.tv_sec) +
+            (double)(probe_end.tv_nsec - probe_begin.tv_nsec) / 1000000000.0;
+        if (connected != (!reject_auth && !untrusted) || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+            fprintf(stderr, "SMTP probe scenario=%d starttls=%d reject_auth=%d untrusted=%d connected=%d expected=%d elapsed=%.3fs child_exit=%d child_signal=%d stages=%s\n",
+                scenario, starttls, reject_auth, untrusted, connected, !reject_auth && !untrusted,
+                elapsed, WIFEXITED(status) ? WEXITSTATUS(status) : -1,
+                WIFSIGNALED(status) ? WTERMSIG(status) : 0, stages);
+        REQUIRE(connected == (!reject_auth && !untrusted));
+        REQUIRE(!strstr(error, "probe-secret"));
         REQUIRE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
         close(listener);
     }
