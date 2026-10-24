@@ -20,6 +20,10 @@ build/assets.h: scripts/embed_assets.py web/index.html web/app.css web/app.js we
 	$(PYTHON) scripts/embed_assets.py $@
 
 build/server.o: build/assets.h
+build/mail_catalogs.h: scripts/embed_mail_templates.py $(wildcard web/mail-locales/*.json)
+	$(PYTHON) scripts/embed_mail_templates.py --output $@
+
+build/mail_templates.o: build/mail_catalogs.h
 build/%.o: src/%.c src/app.h src/certificate.h src/store.h
 	@mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
@@ -42,6 +46,7 @@ build/test_mail_templates: tests/test_mail_templates.c $(LIB_OBJECTS)
 test: certificati build/test_reminders build/test_delivery build/test_lifecycle build/test_incidents build/test_mail_templates
 	$(NODE) tests/test_i18n.cjs
 	$(NODE) tests/test_inventory.cjs
+	$(PYTHON) tests/test_mail_catalogs.py
 	./build/test_reminders
 	./build/test_delivery
 	./build/test_lifecycle
@@ -60,6 +65,7 @@ test: certificati build/test_reminders build/test_delivery build/test_lifecycle 
 	$(PYTHON) tests/operations_integration.py
 	$(PYTHON) tests/incidents_integration.py
 	$(PYTHON) tests/mail_templates_integration.py
+	$(PYTHON) tests/mail_languages_integration.py
 
 clean:
 	rm -rf build certificati

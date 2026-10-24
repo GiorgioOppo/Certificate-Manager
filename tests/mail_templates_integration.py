@@ -133,7 +133,7 @@ class MailTemplateTests(unittest.TestCase):
         saved = next(item for item in state['templates'] if item['alert'] == 'expiry_15' and item['audience'] == 'business')
         self.assertTrue(saved['customized'])
         self.assertEqual(saved['subject'], 'Rinnovo {{common_name}}')
-        self.assertEqual(self.rows('PRAGMA user_version')[0]['user_version'], 7)
+        self.assertEqual(self.rows('PRAGMA user_version')[0]['user_version'], 8)
 
     def test_preview_all_alerts_is_read_only_with_sample_and_real_certificate(self):
         self.start_server()
@@ -163,7 +163,7 @@ class MailTemplateTests(unittest.TestCase):
             db.commit()
             before = self.outbox()
             for row in before:
-                row.update(template_alert='', template_audience='', template_copy=0)
+                row.update(template_alert='', template_audience='', template_copy=0, template_language='')
             objects = db.execute("SELECT sql FROM sqlite_master WHERE tbl_name='outbox' AND type IN('index','trigger') AND sql IS NOT NULL").fetchall()
             db.execute('ALTER TABLE outbox RENAME TO outbox_v7_fixture')
             db.execute("CREATE TABLE outbox(id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -179,11 +179,12 @@ class MailTemplateTests(unittest.TestCase):
             db.execute('DROP TABLE outbox_v7_fixture')
             for (sql,) in objects:
                 db.execute(sql)
+            db.execute('DROP TABLE mail_template_variants')
             db.execute('DROP TABLE mail_templates')
             db.execute('DROP TABLE mail_template_settings')
             db.execute('PRAGMA user_version=6')
         self.start_server()
-        self.assertEqual(self.rows('PRAGMA user_version')[0]['user_version'], 7)
+        self.assertEqual(self.rows('PRAGMA user_version')[0]['user_version'], 8)
         self.assertEqual(self.outbox(), before)
         self.assertTrue(all(not item['copy_enabled'] and not item['customized'] for item in self.templates()['templates']))
 
@@ -342,7 +343,7 @@ class MailTemplateTests(unittest.TestCase):
         expected = {'anna@example.test': 'business', 'luca@example.test': 'technical',
                     'me@example.test': 'self', 'external@example.test': 'other'}
         for item in rows:
-            self.assertEqual(item['subject'], expected[item['recipient_email']] + ' unreachable')
+            self.assertEqual(item['subject'], expected[item['recipient_email']] + ' Servizio non raggiungibile')
             self.assertIn(target, item['body'])
             self.assertFalse(list(self.message(item).iter_attachments()))
         event = next(item for item in state['monitor_events'] if item['kind'] == 'unreachable')

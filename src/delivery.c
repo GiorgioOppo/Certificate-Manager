@@ -387,8 +387,8 @@ static int queue_rows(Store *store, int64_t cert_id, const char *kind,
     if (!store_exec(store, "SAVEPOINT mail_template_queue", err, n)) return 0;
     const char *sql = "INSERT INTO outbox(certificate_id,kind,recipient_name,recipient_email,"
         "threshold,subject,body,attachment_pem,status,attempts,last_error,created_at,next_attempt,"
-        "event_id,template_alert,template_audience,template_copy) "
-        "SELECT ?1,?2,?3,?4,?5,?6,?7,?8,'pending',0,'',?9,0,nullif(?10,0),?11,?12,?13 "
+        "event_id,template_alert,template_audience,template_copy,template_language) "
+        "SELECT ?1,?2,?3,?4,?5,?6,?7,?8,'pending',0,'',?9,0,nullif(?10,0),?11,?12,?13,?14 "
         "WHERE (?2<>'expiry' OR NOT EXISTS(SELECT 1 FROM outbox older WHERE "
         "older.certificate_id=?1 AND older.kind='expiry' AND older.recipient_email=?4 COLLATE NOCASE AND older.threshold<?5)) "
         "AND NOT EXISTS(SELECT 1 FROM outbox prior WHERE prior.certificate_id=?1 AND prior.kind=?2 "
@@ -417,7 +417,9 @@ static int queue_rows(Store *store, int64_t cert_id, const char *kind,
         sqlite3_reset(skip);
         if (existing) continue;
         char *subject = NULL, *body = NULL;
-        if (!mail_templates_render(store, alert, recipients[i].audience, cert_id, event_id,
+        char language[16];
+        if (!mail_templates_active_language(store, alert, recipients[i].audience, language, err, n) ||
+            !mail_templates_render_language(store, alert, recipients[i].audience, language, cert_id, event_id,
             threshold, now, recipients[i].name, recipients[i].email, NULL, NULL,
             &subject, &body, err, n)) {
             char detail[512];
@@ -443,7 +445,7 @@ static int queue_rows(Store *store, int64_t cert_id, const char *kind,
             bind_text(insert, 8, attachment) && sqlite3_bind_int64(insert, 9, now) == SQLITE_OK &&
             sqlite3_bind_int64(insert, 10, event_id) == SQLITE_OK && bind_text(insert, 11, alert) &&
             bind_text(insert, 12, recipients[i].audience) && sqlite3_bind_int(insert, 13, recipients[i].copy) == SQLITE_OK &&
-            sqlite3_step(insert) == SQLITE_DONE;
+            bind_text(insert, 14, language) && sqlite3_step(insert) == SQLITE_DONE;
         free(subject); free(body);
         if (!ok) goto fail;
         added += sqlite3_changes(store->db);

@@ -63,6 +63,7 @@ test('all static, dynamic and server translation references exist', () => {
   }
   for (const alert of ['expiry_45','expiry_30','expiry_15','expiry_2','expired','expiry','escalation','certificate','unreachable','tls_error','changed','verification_error','error','recovered']) references.push(`mailTemplates.alert_${alert}`);
   for (const audience of ['self','business','technical','other']) references.push(`mailTemplates.audience_${audience}`, `mailTemplates.audience_${audience}_help`);
+  for (const key of ['reset_help_active','reset_help_inactive','reset_done_active','reset_done_inactive']) references.push(`mailTemplates.${key}`);
   for(const match of read('src/lifecycle.c').matchAll(/(?:FAIL_IF\([^\n]+,|reason\(out,&first,)\s*"([a-z_]+)"/g)) references.push('ops.reason_'+match[1]);
   for (const key of references) assert.ok(Object.hasOwn(catalogs.it, key), `Unknown translation reference ${key}`);
   assert.equal(new Set(serverKeys).size, serverKeys.length, 'Duplicate server message references');
@@ -133,9 +134,21 @@ test('custom email subjects remain literal for every UI language', () => {
   for (const language of languages) {
     const i18n = load({ query: `?lang=${language}` });
     const subject = 'Certificato HTTPS scaduto: localhost';
-    const data = { outbox: [{ template_alert: 'expired', template_audience: 'self', template_copy: true, subject }] };
+    const data = { outbox: [{ template_alert: 'expired', template_audience: 'self', template_copy: true, template_language: 'ja', subject }] };
     i18n.localizeResponse(data);
     assert.equal(data.outbox[0].subject, subject, `${language}: custom subject`);
+    assert.equal(data.outbox[0].template_language, 'ja', `${language}: sending language`);
+  }
+});
+
+test('message template variants remain independent of interface translation', () => {
+  const subjects = { it: 'Certificato scaduto', en: 'Certificate expired', fr: 'Certificat expiré', es: 'Certificado caducado', 'zh-CN': '证书已过期', ja: '証明書の有効期限が切れました' };
+  for (const uiLanguage of languages) {
+    const i18n = load({ query: `?lang=${uiLanguage}` });
+    const data = { templates: languages.map(language => ({ alert: 'expired', audience: 'business', language, active_language: 'fr', subject: subjects[language], body: `{{recipient_name}}\n${subjects[language]}\n{{fingerprint}}` })) };
+    const original = JSON.stringify(data);
+    i18n.localizeResponse(data);
+    assert.equal(JSON.stringify(data), original, `${uiLanguage}: localized interface must not rewrite stored message variants`);
   }
 });
 

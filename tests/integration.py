@@ -44,7 +44,7 @@ def remove_workflow_v6(connection):
         connection.execute('DROP TRIGGER "' + name.replace('"', '""') + '"')
     for table in ("inventory_rows", "inventory_batches", "inventory_commits", "event_claims",
                   "monitor_options", "renewal_closure_reports", "policy_templates", "workflow_audit",
-                  "mail_templates", "mail_template_settings"):
+                  "mail_template_variants", "mail_templates", "mail_template_settings"):
         connection.execute(f"DROP TABLE IF EXISTS {table}")
 
 
@@ -330,7 +330,7 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(legacy["chain_status"], "legacy")
         self.assertFalse(legacy["pem_available"])
         self.assertEqual(len(state["notifications"]), 1)
-        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 7)
+        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 8)
         status, _, body = self.upload(self.leaf_old.read_bytes())
         self.assertEqual(status, 200, body)
         cert = self.state()["certificates"][0]
@@ -357,7 +357,7 @@ class ApplicationTests(unittest.TestCase):
         # Historical messages have no template metadata; migration adds empty
         # markers without rebuilding their subject or body.
         for row in previous["outbox"]:
-            row.update(template_alert="", template_audience="", template_copy=0)
+            row.update(template_alert="", template_audience="", template_copy=0, template_language="")
         # Remove later additions to recreate a populated, genuine v2 schema.
         with sqlite3.connect(self.db) as connection:
             remove_workflow_v6(connection)
@@ -378,7 +378,7 @@ class ApplicationTests(unittest.TestCase):
                                "attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',"
                                "created_at INTEGER NOT NULL,sent_at INTEGER,next_attempt INTEGER NOT NULL DEFAULT 0,"
                                "UNIQUE(certificate_id,kind,recipient_email,threshold))")
-            columns = [key for key in previous["outbox"][0] if key not in {"event_id", "template_alert", "template_audience", "template_copy"}]
+            columns = [key for key in previous["outbox"][0] if key not in {"event_id", "template_alert", "template_audience", "template_copy", "template_language"}]
             column_list = ",".join(columns)
             connection.execute(f"INSERT INTO outbox({column_list}) SELECT {column_list} FROM outbox_v5_fixture")
             connection.execute("DROP TABLE outbox_v5_fixture")
@@ -395,7 +395,7 @@ class ApplicationTests(unittest.TestCase):
             connection.execute("PRAGMA user_version=2")
         self.start_server()
         state = self.state()
-        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 7)
+        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 8)
         self.assertEqual(state["monitors"], [])
         self.assertEqual(state["monitor_events"], [])
         for table in tables:

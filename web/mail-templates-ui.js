@@ -5,25 +5,33 @@
   const el = (tag, cls, text) => core().element(tag, cls, text);
   const api = (path, body, method = 'POST') => core().request(`/api/mail-templates/${path}`, { method, headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
   const bool = value => value === true || value === 1 || value === '1';
-  const storageKey = 'certificate-manager-mail-template-drafts-v1';
+  const storageKey = 'certificate-manager-mail-template-drafts-v2', legacyStorageKey = 'certificate-manager-mail-template-drafts-v1';
+  const messageLanguages = ['it', 'en', 'fr', 'es', 'zh-CN', 'ja'];
   let mounted = false, loading = false, busy = false, state = null, fields, controls, status, notice, previewBox, settingsForm, settingsFields, settingsStatus, variableList;
   let selected = '', drafts = {}, settingsDraft = null, persisted = true, previewGeneration = 0, certificateSignature = '', eventSignature = '';
   let activeEditor = null;
   try {
-    const saved = JSON.parse(window.sessionStorage.getItem(storageKey) || 'null');
-    if (saved && saved.version === 1) { selected = typeof saved.selected === 'string' ? saved.selected : ''; drafts = saved.drafts && typeof saved.drafts === 'object' && !Array.isArray(saved.drafts) ? saved.drafts : {}; settingsDraft = saved.settings && typeof saved.settings === 'object' ? saved.settings : null; }
+    const saved = JSON.parse(window.sessionStorage.getItem(storageKey) || window.sessionStorage.getItem(legacyStorageKey) || 'null');
+    if (saved && (saved.version === 1 || saved.version === 2)) {
+      const languageKey = key => key.split('|').length === 2 ? `${key}|it` : key;
+      selected = typeof saved.selected === 'string' ? languageKey(saved.selected) : '';
+      const previous = saved.drafts && typeof saved.drafts === 'object' && !Array.isArray(saved.drafts) ? saved.drafts : {};
+      drafts = Object.fromEntries(Object.entries(previous).map(([key, value]) => [languageKey(key), value]));
+      settingsDraft = saved.settings && typeof saved.settings === 'object' ? saved.settings : null;
+    }
   } catch (_) { persisted = false; }
   function persist() {
-    try { window.sessionStorage.setItem(storageKey, JSON.stringify({ version: 1, selected, drafts, settings: settingsDraft })); persisted = true; }
+    try { window.sessionStorage.setItem(storageKey, JSON.stringify({ version: 2, selected, drafts, settings: settingsDraft })); persisted = true; }
     catch (_) { persisted = false; }
   }
   const dirty = () => Object.keys(drafts).length > 0 || !!settingsDraft;
-  const valueKey = (alert, audience) => `${alert}|${audience}`;
-  const savedTemplate = () => (state?.templates || []).find(item => valueKey(item.alert, item.audience) === selected);
+  const valueKey = (alert, audience, language) => `${alert}|${audience}|${language}`;
+  const savedTemplate = () => (state?.templates || []).find(item => valueKey(item.alert, item.audience, item.language || 'it') === selected);
+  const languageLabel = language => (state?.languages || []).find(item => item.id === language)?.label || language;
   function templateValues(item) { return { subject: String(item?.subject || ''), body: String(item?.body || ''), copy_enabled: bool(item?.copy_enabled) }; }
   function currentValues() { return { subject: fields.subject.input.value, body: fields.body.input.value, copy_enabled: controls.copy.checked }; }
   function equals(a, b) { return a.subject === b.subject && a.body === b.body && a.copy_enabled === b.copy_enabled; }
-  function selectedParts() { return { alert: controls.alert.value, audience: controls.audience.value }; }
+  function selectedParts() { return { alert: controls.alert.value, audience: controls.audience.value, language: controls.language.value }; }
   function say(text, error = false) { notice.textContent = text; notice.classList.toggle('import-chain-warning', error); }
   function invalidatePreview() { previewGeneration++; previewBox.replaceChildren(); }
   function showStatus() {
@@ -32,7 +40,9 @@
     status.classList.toggle('mail-template-draft', !!drafts[selected]);
     controls.discard.hidden = !drafts[selected];
     controls.draftSummary.textContent = Object.keys(drafts).length ? t('drafts_preserved', [Object.keys(drafts).length]) : '';
-    controls.save.disabled = busy || !drafts[selected];
+    const activeLanguage = item?.active_language || 'it';
+    controls.activeLanguage.textContent = t('active_language', [languageLabel(activeLanguage)]);
+    controls.save.disabled = busy || (!drafts[selected] && controls.language.value === activeLanguage);
     settingsStatus.textContent = settingsDraft ? t('draft_status') : t('settings_saved_status');
     settingsForm.querySelector('[type="submit"]').disabled = busy || !settingsDraft;
     controls.discardSettings.hidden = !settingsDraft;
@@ -44,7 +54,7 @@
     persist(); showStatus(); invalidatePreview(); say('');
   }
   function fillTemplate() {
-    selected = valueKey(controls.alert.value, controls.audience.value);
+    selected = valueKey(controls.alert.value, controls.audience.value, controls.language.value);
     const item = savedTemplate(), values = drafts[selected] || templateValues(item);
     fields.subject.input.value = String(values.subject || ''); fields.body.input.value = String(values.body || ''); controls.copy.checked = controls.audience.value !== 'other' && bool(values.copy_enabled);
     controls.copy.disabled = busy || controls.audience.value === 'other';
@@ -84,26 +94,33 @@
       insert.className = 'mail-template-variable'; insert.title = t('insert_variable', [token]); variableList.append(insert);
     }
   }
-  async function load({ keepSelection = true } = {}) {
+  async function load({ keepSelection = true, language = selected.split('|')[2] || 'it' } = {}) {
     if (loading) return; loading = true;
     // A refresh holds the same UI lock as a mutation, so an older read cannot
     // overwrite the state reloaded after saving. Draft values stay in memory.
     const wasBusy = busy;
     if (mounted) lock(true);
     try {
-      const data = await core().request('/api/mail-templates/state'); state = data;
+      if (!messageLanguages.includes(language)) language = 'it';
+      const data = await core().request(`/api/mail-templates/state?language=${encodeURIComponent(language)}`); state = data;
       if (!mounted) mount();
       const previous = keepSelection ? selected.split('|') : [];
-      controls.alert.replaceChildren(); controls.audience.replaceChildren();
+      controls.alert.replaceChildren(); controls.audience.replaceChildren(); controls.language.replaceChildren();
       for (const item of data.alerts || []) core().appendOption(controls.alert, item.id, t(`alert_${item.id}`));
       for (const item of data.audiences || []) core().appendOption(controls.audience, item.id, t(`audience_${item.id}`));
+      for (const item of data.languages || []) core().appendOption(controls.language, item.id, item.label);
       if ([...controls.alert.options].some(item => item.value === previous[0])) controls.alert.value = previous[0];
       if ([...controls.audience.options].some(item => item.value === previous[1])) controls.audience.value = previous[1];
-      for (const [key, draft] of Object.entries(drafts)) { const saved = data.templates.find(item => valueKey(item.alert, item.audience) === key); if (!saved || equals(templateValues(draft), templateValues(saved))) delete drafts[key]; }
+      controls.language.value = language;
+      // A language-specific response cannot decide whether another variant's
+      // draft is redundant. Preserve those drafts until that language is read.
+      for (const [key, draft] of Object.entries(drafts)) { const saved = data.templates.find(item => valueKey(item.alert, item.audience, item.language || 'it') === key); if (saved && equals(templateValues(draft), templateValues(saved))) delete drafts[key]; }
       fillTemplate(); fillSettings(); addVariables(); updateContext();
+      return true;
     } catch (error) {
       if (mounted) say(error.message, true);
       else { const host = core().byId('mail-templates-content'); host.replaceChildren(el('p', 'import-chain-warning', error.message), core().action(t('reload'), () => load())); }
+      return false;
     } finally { loading = false; if (mounted) lock(wasBusy); }
   }
   async function saveTemplate(event) {
@@ -111,17 +128,19 @@
     const parts = selectedParts(), key = selected, values = currentValues();
     const body = new URLSearchParams({ ...parts, subject: values.subject, body: values.body, copy_enabled: values.copy_enabled ? '1' : '0' });
     lock(true);
-    try { await api('template', body, 'PUT'); delete drafts[key]; persist(); await load(); say(t('saved')); }
+    try { await api('template', body, 'PUT'); delete drafts[key]; persist(); if (await load()) say(t('saved')); }
     catch (error) { say(error.message, true); }
     finally { lock(false); }
   }
   async function resetTemplate() {
     if (busy) return;
-    const content = el('p', '', t('reset_help'));
-    const confirmed = window.CertificateUI ? await window.CertificateUI.modal(t('reset_title'), content, t('reset')) : window.confirm(t('reset_help'));
+    const active = savedTemplate()?.active_language === controls.language.value;
+    const help = t(active ? 'reset_help_active' : 'reset_help_inactive', [languageLabel(controls.language.value)]);
+    const content = el('p', '', help);
+    const confirmed = window.CertificateUI ? await window.CertificateUI.modal(t('reset_title'), content, t('reset')) : window.confirm(help);
     if (!confirmed) return;
     const key = selected, parts = selectedParts(); lock(true);
-    try { await api('reset', new URLSearchParams(parts)); delete drafts[key]; persist(); await load(); say(t('reset_done')); }
+    try { await api('reset', new URLSearchParams(parts)); delete drafts[key]; persist(); if (await load()) say(t(active ? 'reset_done_active' : 'reset_done_inactive')); }
     catch (error) { say(error.message, true); }
     finally { lock(false); }
   }
@@ -179,7 +198,8 @@
     }); settings.append(settingsForm);
     controls.form = el('form', 'mail-template-editor'); controls.form.autocomplete = 'off';
     const selectors = el('div', 'workflow-form-grid');
-    const alert = makeSelect(t('alert_label'), 'mail-template-alert'), audience = makeSelect(t('audience_label'), 'mail-template-audience'); controls.alert = alert.input; controls.audience = audience.input; selectors.append(alert.wrapper, audience.wrapper);
+    const alert = makeSelect(t('alert_label'), 'mail-template-alert'), audience = makeSelect(t('audience_label'), 'mail-template-audience'), language = makeSelect(t('language_label'), 'mail-template-language'); controls.alert = alert.input; controls.audience = audience.input; controls.language = language.input; selectors.append(alert.wrapper, audience.wrapper, language.wrapper);
+    controls.activeLanguage = el('p', 'mail-template-impact'); controls.activeLanguage.setAttribute('role', 'status');
     controls.audienceHelp = el('p', 'workflow-help'); status = el('p', 'mail-template-status'); status.setAttribute('role', 'status'); controls.draftSummary = el('p', 'workflow-help');
     fields = { subject: core().formField(t('subject'), 'text', '', { required: true, maxLength: 998 }), body: core().formField(t('body'), 'textarea', '', { required: true, maxLength: 16384 }) };
     fields.subject.input.id = 'mail-template-subject'; fields.body.input.id = 'mail-template-body'; fields.body.input.rows = 11;
@@ -191,8 +211,14 @@
     controls.discard = core().action(t('discard_draft'), () => { delete drafts[selected]; persist(); fillTemplate(); });
     controls.reset = core().action(t('reset'), resetTemplate); controls.reload = core().action(t('reload'), () => load());
     actions.append(controls.save, controls.discard, controls.reset, controls.reload);
-    controls.form.append(selectors, controls.audienceHelp, status, controls.draftSummary, fields.subject.wrapper, fields.body.wrapper, copyLabel, controls.copyHelp, variables, actions);
+    controls.form.append(selectors, controls.activeLanguage, el('p', 'workflow-help', t('language_help')), controls.audienceHelp, status, controls.draftSummary, fields.subject.wrapper, fields.body.wrapper, copyLabel, controls.copyHelp, variables, actions);
     controls.alert.addEventListener('change', fillTemplate); controls.audience.addEventListener('change', fillTemplate); controls.form.addEventListener('submit', saveTemplate);
+    controls.language.addEventListener('change', () => {
+      const language = controls.language.value;
+      // Keep the current form and its language together until the read succeeds.
+      controls.language.value = selected.split('|')[2] || 'it';
+      invalidatePreview(); void load({ language });
+    });
     const preview = el('section', 'mail-template-preview'); preview.append(el('h4', '', t('preview_title')), el('p', 'workflow-help', t('preview_help')));
     const previewGrid = el('div', 'workflow-form-grid'); const cert = makeSelect(t('preview_certificate'), 'mail-template-certificate'), event = makeSelect(t('preview_event'), 'mail-template-event'); controls.certificate = cert.input; controls.event = event.input;
     core().appendOption(controls.certificate, '', t('sample_certificate')); core().appendOption(controls.event, '', t('sample_event'));

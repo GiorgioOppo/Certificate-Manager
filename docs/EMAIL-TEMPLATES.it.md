@@ -5,12 +5,18 @@ La pagina **Coda email** (`/email`) permette di cambiare oggetto e testo di ogni
 ## Preparare un modello
 
 1. In **Il mio destinatario personale**, salva **Il mio nome** e **La mia email**. Questo è il destinatario del gruppo **A me**, distinto dal mittente SMTP.
-2. Scegli il tipo di avviso e il gruppo destinatario.
+2. Scegli il tipo di avviso, il gruppo destinatario e la **Lingua del messaggio**: Italiano, English, Français, Español, 简体中文 o 日本語. Ogni avviso e gruppo dispone di una variante predefinita in tutte e sei le lingue: **336 modelli** in totale.
 3. Modifica l’oggetto e il corpo in testo semplice. Inserisci le variabili con la sintassi esatta `{{nome_variabile}}`.
 4. Consulta l’anteprima con un certificato o un evento disponibile, oppure con i dati dimostrativi indicati dall’interfaccia. L’anteprima non scrive nel registro, non prepara messaggi e non invia email.
-5. Salva. Il modello sarà usato quando verranno preparati nuovi messaggi per quella combinazione.
+5. Premi **Salva template e usa questa lingua**. Il modello e la lingua scelti saranno usati quando verranno preparati nuovi messaggi per quella combinazione di avviso e gruppo.
 
-**Ripristina predefinito** ripristina soltanto l’avviso e il gruppo selezionati, disabilitando le relative copie aggiuntive. I messaggi già preparati, inclusi quelli non ancora inviati, mantengono oggetto e corpo originari: puoi verificarli con **Scarica .eml**. Un ritentativo di un messaggio non riuscito usa lo stesso contenuto già presente in coda.
+La riga **Lingua attiva per gli invii** indica la lingua effettivamente configurata per l’avviso e il gruppo. Il selettore permette di leggere, provare e modificare le altre varianti; consultarle non cambia gli invii. La lingua dell’interfaccia è indipendente: per esempio puoi usare l’interfaccia italiana, inviare l’avviso a 15 giorni in francese ai referenti e il certificato firmato in inglese ai tecnici. Le varianti personalizzate delle altre lingue restano salvate quando attivi una lingua diversa.
+
+**Ripristina predefinito** ripristina soltanto la variante di lingua selezionata. Se è la lingua attiva, resta attiva e le relative copie aggiuntive vengono disabilitate; se è una lingua inattiva, la lingua degli invii e le copie non cambiano. La finestra di conferma descrive l’effetto prima di procedere.
+
+Le bozze sono conservate separatamente per avviso, gruppo e lingua nello storage della scheda del browser, insieme alle eventuali modifiche del destinatario personale. Puoi cambiare la lingua del messaggio senza perdere le altre bozze. Per cambiare la lingua dell’interfaccia, salva o scarta prima tutte le bozze. Le bozze della versione precedente vengono conservate come varianti italiane; i testi personalizzati non sono tradotti automaticamente.
+
+I messaggi già preparati, inclusi quelli non ancora inviati, mantengono oggetto, corpo e lingua originari: puoi verificarli con **Scarica .eml**. Un ritentativo di un messaggio non riuscito usa lo stesso contenuto già presente in coda. Cambiare la lingua attiva non reinvia un evento già preparato.
 
 ## Avvisi disponibili
 
@@ -43,6 +49,8 @@ I destinatari già previsti dal flusso continuano a ricevere i loro messaggi: i 
 
 Per aggiungere A me, Referenti o Referenti tecnici agli altri avvisi, abilita **Invia anche una copia a questo gruppo** sul modello pertinente. Ogni combinazione avviso/gruppo è indipendente; inizialmente le copie sono tutte disabilitate. Il gruppo Altri destinatari non crea copie: personalizza soltanto gli indirizzi già esplicitamente configurati.
 
+L’abilitazione delle copie è condivisa fra tutte le lingue dello stesso avviso e gruppo: non esistono copie distinte per lingua. Salvarne una variante applica l’opzione visualizzata e attiva la lingua scelta. Scegliere un’altra lingua nel selettore, senza salvare, non abilita né disabilita copie. Non viene rilevata automaticamente la lingua di una persona: il programma usa la lingua attiva della combinazione avviso/gruppo risultante dall’instradamento.
+
 Esempio: abilita la copia **A me** per Scadenza entro 15 giorni e Certificato cambiato; abilita **Referenti tecnici** per Scadenza entro 2 giorni. Le altre scadenze continuano a seguire i percorsi preesistenti. Una persona che compare in più gruppi riceve un solo messaggio per lo stesso evento, confrontando l’indirizzo senza distinzione fra maiuscole e minuscole.
 
 Per gli avvisi di scadenza e la distribuzione prevale il ruolo del destinatario originale. Per monitor ed escalation viene scelto prima A me se l’indirizzo coincide con il profilo personale, poi Referenti, Referenti tecnici e infine Altri destinatari. Tra sole copie aggiuntive la precedenza è A me, Referenti, Referenti tecnici; un invio originale ha sempre precedenza sulle copie.
@@ -61,14 +69,14 @@ Prima di prendere un messaggio in carico per l’invio, il server ricontrolla i 
 | `{{root_ca}}`, `{{intermediate_ca}}` | CA ricostruite con i certificati disponibili nel registro. |
 | `{{sans}}` | Identità SAN. |
 | `{{recipient_name}}`, `{{recipient_email}}` | Nome e indirizzo del singolo destinatario. |
-| `{{recipient_role}}` | Gruppo del destinatario: `self`, `business`, `technical` o `other`. |
+| `{{recipient_role}}` | Nome del gruppo destinatario nella lingua del messaggio. |
 | `{{threshold}}` | Soglia del promemoria; `0` indica la scadenza. |
 | `{{days_remaining}}` | Giorni residui del certificato al momento della preparazione. |
 | `{{service_url}}` | URL del monitor nell’avviso di servizio. |
-| `{{event_type}}`, `{{event_message}}` | Tipo tecnico e descrizione dell’evento. |
+| `{{event_type}}`, `{{event_message}}` | Etichetta del tipo di evento nella lingua del messaggio e diagnostica originale dell’evento. |
 | `{{expected_fingerprint}}`, `{{observed_fingerprint}}` | Impronte prevista e osservata nell’evento. |
 
-Un dato non applicabile al tipo di avviso può essere vuoto. Le CA mancanti non vengono inventate; il CN non individua da solo una versione del certificato, quindi includi l’impronta per distinguere rinnovi contemporaneamente validi. Nomi, indirizzi e valori dei certificati restano dati dell’utente; il programma non li traduce.
+Un dato non applicabile al tipo di avviso può essere vuoto. Le CA mancanti non vengono inventate; il CN non individua da solo una versione del certificato, quindi includi l’impronta per distinguere rinnovi contemporaneamente validi. Nomi, indirizzi e valori dei certificati restano dati dell’utente; il programma non li traduce. Le date dei modelli sono espresse in formato ISO 8601 UTC, per esempio `2027-04-01T12:00:00Z`, indipendentemente dalla lingua. Sono tradotti l’oggetto, il testo esplicativo, le etichette `recipient_role` e `event_type` e i saluti dei modelli predefiniti. La diagnostica originale `event_message` resta nella lingua e nella forma del controllo tecnico; il testo dimostrativo delle anteprime è localizzato.
 
 Esempio per i referenti, scadenza entro 15 giorni:
 
@@ -103,7 +111,7 @@ Controlla l’anteprima anche con i dati del registro: un modello breve può pro
 
 L’anteprima e il salvataggio dei modelli non abilitano SMTP. Gli invii richiedono una configurazione SMTP abilitata nella stessa pagina; senza di essa i messaggi restano in coda. Lo stato Inviata indica accettazione da parte del server SMTP, non ricezione né installazione del certificato.
 
-I modelli e l’indirizzo personale sono compresi nel backup del database. Lo schema **v7** migra automaticamente la versione 6, conservando la coda e lo storico e senza abilitare copie aggiuntive. Prima dell’aggiornamento arresta tutti i processi dell’applicazione e salva database e chiave `<archivio>.smtp.key`, se presente. L’interfaccia mantiene il modello di accesso locale esistente: non offre utenti autenticati o ruoli di autorizzazione.
+I modelli, le lingue attive e l’indirizzo personale sono compresi nel backup del database. Lo schema **v8** aggiunge le varianti multilingua e la lingua attiva per avviso e gruppo. Migra automaticamente la versione 7 mantenendo i modelli personalizzati come varianti italiane, le precedenti impostazioni delle copie e tutti i messaggi già preparati. In assenza di una scelta esplicita, la lingua degli invii resta l’italiano. La migrazione della versione 6 conserva la coda e lo storico e non abilita copie aggiuntive. Prima dell’aggiornamento arresta tutti i processi dell’applicazione e salva database e chiave `<archivio>.smtp.key`, se presente. L’interfaccia mantiene il modello di accesso locale esistente: non offre utenti autenticati o ruoli di autorizzazione.
 
 ## Compatibilità SMTP verificata
 

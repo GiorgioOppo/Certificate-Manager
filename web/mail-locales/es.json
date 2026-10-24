@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "language": "es",
+  "label_native": "Español",
+  "demo_recipient": "Destinatario de demostración",
+  "demo_message": "Ejemplo de demostración: compruebe el servicio HTTPS y el certificado que presenta.",
+  "event_message_label": "Detalles técnicos originales",
+  "footer": "Mensaje generado por {{app_name}}. Las fechas se expresan en UTC.",
+  "fields": {
+    "common_name": "Nombre común (CN)",
+    "not_before": "Fecha de emisión",
+    "not_after": "Fecha de caducidad",
+    "days_remaining": "Días restantes",
+    "threshold": "Umbral de aviso (días)",
+    "fingerprint": "Huella del certificado",
+    "serial": "Número de serie",
+    "issuer": "Emisor",
+    "root_ca": "CA raíz",
+    "intermediate_ca": "CA intermedia",
+    "sans": "Nombres alternativos del sujeto (SAN)",
+    "service_url": "Servicio HTTPS",
+    "event_type": "Tipo de evento",
+    "event_message": "Detalles técnicos originales",
+    "expected_fingerprint": "Huella esperada",
+    "observed_fingerprint": "Huella observada"
+  },
+  "audiences": {
+    "self": {
+      "label": "Administrador",
+      "subject_prefix": "[Personal] ",
+      "greeting": "Resumen personal para {{recipient_name}},",
+      "actions": {
+        "expiry": "Coordine la renovación con los responsables y compruebe la persona asignada, las fechas operativas y los servicios afectados en el registro.",
+        "expired": "Coordine con urgencia la renovación y el restablecimiento de los servicios afectados. Compruebe el progreso con los responsables técnicos.",
+        "escalation": "Contacte con los responsables de la renovación, aclare las tareas pendientes y actualice los plazos operativos.",
+        "certificate": "Coordine la entrega y la instalación del certificado firmado. Revise la lista de comprobación antes de cerrar la renovación.",
+        "monitor": "Asigne la revisión del servicio a un responsable técnico y siga la resolución de la incidencia. Un certificado inesperado requiere una revisión explícita.",
+        "recovered": "Confirme el restablecimiento con los responsables técnicos y actualice el estado operativo de la incidencia en el registro."
+      }
+    },
+    "business": {
+      "label": "Responsable funcional",
+      "subject_prefix": "[Responsable funcional] ",
+      "greeting": "Estimado/a {{recipient_name}}:",
+      "actions": {
+        "expiry": "Planifique la renovación con el responsable técnico y confirme las fechas de solicitud, entrega e instalación.",
+        "expired": "Contacte con urgencia con el responsable técnico para renovar el certificado y evaluar el efecto en los servicios.",
+        "escalation": "Confirme el plan de renovación con el responsable técnico y comunique cualquier obstáculo o retraso.",
+        "certificate": "Acuerde una ventana de instalación del certificado firmado con el responsable técnico y compruebe la finalización de la tarea.",
+        "monitor": "Acuerde la revisión del servicio con el responsable técnico y evalúe el impacto en la actividad.",
+        "recovered": "Confirme con el responsable técnico que el servicio vuelve a funcionar y compruebe cualquier impacto pendiente."
+      }
+    },
+    "technical": {
+      "label": "Responsable técnico",
+      "subject_prefix": "[Técnico] ",
+      "greeting": "Estimado/a {{recipient_name}}:",
+      "actions": {
+        "expiry": "Prepare la renovación y programe la instalación en los servicios afectados. Tras instalarlo, compruebe la cadena, los nombres y la huella del certificado presentado.",
+        "expired": "Renueve e instale el certificado con urgencia. Compruebe cada servicio afectado y registre las pruebas de instalación.",
+        "escalation": "Compruebe el progreso de la solicitud y de la instalación, resuelva los impedimentos y actualice el expediente de renovación.",
+        "certificate": "Instale el certificado firmado y la cadena necesaria. Compruebe la huella presentada por cada servicio y complete la lista de comprobación de la renovación.",
+        "monitor": "Compruebe la accesibilidad, la negociación TLS, la cadena y la huella presentada. Compare el resultado con el registro antes de aprobar un certificado diferente.",
+        "recovered": "Confirme la accesibilidad y la validación TLS, compruebe el certificado presentado y registre el resultado."
+      }
+    },
+    "other": {
+      "label": "Destinatario",
+      "subject_prefix": "[Notificación] ",
+      "greeting": "Estimado/a {{recipient_name}}:",
+      "actions": {
+        "expiry": "Contacte con los responsables del certificado para acordar la renovación y las fechas de instalación.",
+        "expired": "Avise con urgencia a los responsables del certificado y acuerde las tareas de renovación y comprobación de los servicios.",
+        "escalation": "Contacte con los responsables de la renovación para aclarar las tareas pendientes.",
+        "certificate": "Acuerde la entrega y la instalación del certificado firmado con los responsables técnicos.",
+        "monitor": "Avise a los responsables del servicio y organice la revisión técnica de la incidencia.",
+        "recovered": "Acuerde con los responsables del servicio la confirmación del restablecimiento y el cierre de la incidencia."
+      }
+    }
+  },
+  "alerts": {
+    "expiry_45": {
+      "label": "Aviso a 45 días",
+      "category": "expiry",
+      "subject": "Certificado HTTPS {{common_name}}: umbral de caducidad de 45 días",
+      "text": "Este certificado HTTPS ha alcanzado el umbral de aviso de 45 días. Comience a planificar su renovación."
+    },
+    "expiry_30": {
+      "label": "Aviso a 30 días",
+      "category": "expiry",
+      "subject": "Certificado HTTPS {{common_name}}: umbral de caducidad de 30 días",
+      "text": "Este certificado HTTPS ha alcanzado el umbral de aviso de 30 días. Confirme que la solicitud de renovación y los trabajos de instalación estén programados."
+    },
+    "expiry_15": {
+      "label": "Aviso a 15 días",
+      "category": "expiry",
+      "subject": "Certificado HTTPS {{common_name}}: umbral de caducidad de 15 días",
+      "text": "Este certificado HTTPS ha alcanzado el umbral de aviso de 15 días. Compruebe el progreso de la renovación y la disponibilidad de una ventana de instalación."
+    },
+    "expiry_2": {
+      "label": "Aviso a 2 días",
+      "category": "expiry",
+      "subject": "Urgente: certificado HTTPS {{common_name}}, umbral de caducidad de 2 días",
+      "text": "Este certificado HTTPS ha alcanzado el umbral de aviso de 2 días. La renovación y la instalación requieren atención inmediata."
+    },
+    "expired": {
+      "label": "Certificado caducado",
+      "category": "expired",
+      "subject": "Certificado HTTPS caducado: {{common_name}}",
+      "text": "El periodo de validez de este certificado HTTPS ha finalizado. Los servicios que lo presenten pueden no superar la validación TLS."
+    },
+    "expiry": {
+      "label": "Aviso de caducidad personalizado",
+      "category": "expiry",
+      "subject": "Certificado HTTPS {{common_name}}: umbral de caducidad de {{threshold}} días",
+      "text": "Este certificado HTTPS ha alcanzado el umbral de aviso personalizado. Consulte los días restantes y las fechas indicadas a continuación."
+    },
+    "escalation": {
+      "label": "Escalación de la renovación",
+      "category": "escalation",
+      "subject": "Escalación de la renovación del certificado HTTPS {{common_name}}",
+      "text": "Ha transcurrido el plazo de escalación desde el primer aviso registrado para este certificado. Compruebe las tareas de renovación e instalación pendientes."
+    },
+    "certificate": {
+      "label": "Certificado firmado disponible",
+      "category": "certificate",
+      "subject": "Certificado HTTPS firmado para {{common_name}}: válido hasta {{not_after}}",
+      "text": "El certificado HTTPS firmado para {{common_name}} está disponible como archivo adjunto. El adjunto contiene únicamente certificados públicos y no incluye claves privadas. La entrega no confirma la instalación."
+    },
+    "unreachable": {
+      "label": "Servicio no accesible",
+      "category": "monitor",
+      "subject": "Servicio HTTPS no accesible: {{service_url}}",
+      "text": "La comprobación automática no ha podido acceder al servicio HTTPS. Un fallo de resolución DNS o de conexión TCP puede impedir la obtención del certificado. Consulte los detalles técnicos originales."
+    },
+    "tls_error": {
+      "label": "Error de conexión TLS",
+      "category": "monitor",
+      "subject": "Error de conexión TLS: {{service_url}}",
+      "text": "La conexión al servicio no ha completado correctamente la negociación TLS. Es posible que no se haya obtenido el certificado o que la sesión se haya interrumpido."
+    },
+    "changed": {
+      "label": "Certificado diferente al del registro",
+      "category": "monitor",
+      "subject": "Certificado HTTPS cambiado: {{service_url}}",
+      "text": "El servicio presenta un certificado cuya huella difiere de la esperada en el registro. Puede tratarse de una renovación instalada o de un cambio inesperado; el nuevo certificado no se aprueba automáticamente."
+    },
+    "verification_error": {
+      "label": "Validación del certificado fallida",
+      "category": "monitor",
+      "subject": "Validación del certificado HTTPS fallida: {{service_url}}",
+      "text": "Se ha obtenido el certificado del servicio, pero la validación de confianza TLS ha fallado. Compruebe los nombres, la validez y la cadena de certificación antes de aceptar el resultado."
+    },
+    "error": {
+      "label": "Error de supervisión",
+      "category": "monitor",
+      "subject": "Error al comprobar el servicio HTTPS: {{service_url}}",
+      "text": "La comprobación automática del servicio HTTPS ha terminado con un error. Consulte los detalles técnicos originales y repita la comprobación tras identificar la causa."
+    },
+    "recovered": {
+      "label": "Servicio restablecido",
+      "category": "recovered",
+      "subject": "Servicio HTTPS restablecido: {{service_url}}",
+      "text": "La última comprobación indica que el servicio HTTPS vuelve a funcionar. El restablecimiento técnico no cierra automáticamente la tarea de gestión de la incidencia."
+    }
+  }
+}

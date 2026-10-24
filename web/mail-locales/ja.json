@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "language": "ja",
+  "label_native": "日本語",
+  "demo_recipient": "デモ受信者",
+  "demo_message": "デモ例：HTTPS サービスと、サービスが提示する証明書を確認してください。",
+  "event_message_label": "元の技術詳細",
+  "footer": "このメールは {{app_name}} が生成しました。日時はすべて UTC で表示しています。",
+  "fields": {
+    "common_name": "コモンネーム（CN）",
+    "not_before": "発行日時",
+    "not_after": "有効期限",
+    "days_remaining": "残り日数",
+    "threshold": "通知しきい値（日）",
+    "fingerprint": "証明書のフィンガープリント",
+    "serial": "シリアル番号",
+    "issuer": "発行者",
+    "root_ca": "ルート CA",
+    "intermediate_ca": "中間 CA",
+    "sans": "サブジェクト代替名（SAN）",
+    "service_url": "HTTPS サービス",
+    "event_type": "イベントの種類",
+    "event_message": "元の技術詳細",
+    "expected_fingerprint": "期待するフィンガープリント",
+    "observed_fingerprint": "検出したフィンガープリント"
+  },
+  "audiences": {
+    "self": {
+      "label": "管理者",
+      "subject_prefix": "【個人向け】",
+      "greeting": "{{recipient_name}} 様、個人向けの概要をお知らせします。",
+      "actions": {
+        "expiry": "担当者と更新作業を調整し、台帳で作業責任者、作業予定日、更新対象サービスを確認してください。",
+        "expired": "証明書の更新と影響を受けたサービスの復旧を至急調整し、技術担当者に進捗を確認してください。",
+        "escalation": "更新責任者に連絡し、未完了の作業を明確にして、作業期限を更新してください。",
+        "certificate": "署名済み証明書の配布とインストールを調整してください。更新を完了する前に、チェックリストを確認してください。",
+        "monitor": "技術担当者にサービスの調査を依頼し、問題解決までの対応を確認してください。想定外の証明書には明示的な確認が必要です。",
+        "recovered": "技術担当者と復旧を確認し、台帳の問題対応ステータスを更新してください。"
+      }
+    },
+    "business": {
+      "label": "業務担当者",
+      "subject_prefix": "【業務担当者向け】",
+      "greeting": "{{recipient_name}} 様",
+      "actions": {
+        "expiry": "技術担当者と更新を計画し、申請、配布、インストールの予定日を確認してください。",
+        "expired": "技術担当者に至急連絡し、証明書の更新とサービスへの影響を確認してください。",
+        "escalation": "技術担当者と更新計画を確認し、障害や遅延があれば報告してください。",
+        "certificate": "技術担当者と署名済み証明書のインストール時間帯を調整し、作業完了を確認してください。",
+        "monitor": "技術担当者とサービスの確認を調整し、業務への影響を評価してください。",
+        "recovered": "技術担当者とサービスの復旧を確認し、残っている影響がないか確認してください。"
+      }
+    },
+    "technical": {
+      "label": "技術担当者",
+      "subject_prefix": "【技術担当者向け】",
+      "greeting": "{{recipient_name}} 様",
+      "actions": {
+        "expiry": "更新を準備し、対象サービスへのインストールを計画してください。インストール後は、サービスが提示する証明書のチェーン、名前、フィンガープリントを検証してください。",
+        "expired": "証明書を至急更新してインストールしてください。対象サービスをすべて確認し、インストールの検証結果を記録してください。",
+        "escalation": "申請とインストールの進捗を確認し、問題を解消して、更新案件を更新してください。",
+        "certificate": "署名済み証明書と必要なチェーンをインストールしてください。各サービスが提示するフィンガープリントを検証し、更新チェックリストを完了してください。",
+        "monitor": "到達性、TLS ハンドシェイク、チェーン、提示されたフィンガープリントを確認してください。別の証明書を承認する前に、結果を台帳と比較してください。",
+        "recovered": "到達性と TLS 検証の成功を確認し、提示された証明書を確認して、結果を記録してください。"
+      }
+    },
+    "other": {
+      "label": "受信者",
+      "subject_prefix": "【通知】",
+      "greeting": "{{recipient_name}} 様",
+      "actions": {
+        "expiry": "証明書の担当者に連絡し、更新とインストールの予定日を調整してください。",
+        "expired": "証明書の担当者に至急通知し、更新作業とサービスの確認を調整してください。",
+        "escalation": "更新責任者に連絡し、未完了の作業を確認してください。",
+        "certificate": "技術担当者と署名済み証明書の配布およびインストールを調整してください。",
+        "monitor": "サービスの担当者に通知し、問題の技術調査を手配してください。",
+        "recovered": "サービスの担当者と復旧の確認および問題対応の完了を調整してください。"
+      }
+    }
+  },
+  "alerts": {
+    "expiry_45": {
+      "label": "45 日前の通知",
+      "category": "expiry",
+      "subject": "HTTPS 証明書 {{common_name}}：有効期限の 45 日前の通知",
+      "text": "この HTTPS 証明書は、期限前通知のしきい値である 45 日に達しました。更新の計画を開始してください。"
+    },
+    "expiry_30": {
+      "label": "30 日前の通知",
+      "category": "expiry",
+      "subject": "HTTPS 証明書 {{common_name}}：有効期限の 30 日前の通知",
+      "text": "この HTTPS 証明書は、期限前通知のしきい値である 30 日に達しました。更新申請とインストール作業が予定されていることを確認してください。"
+    },
+    "expiry_15": {
+      "label": "15 日前の通知",
+      "category": "expiry",
+      "subject": "HTTPS 証明書 {{common_name}}：有効期限の 15 日前の通知",
+      "text": "この HTTPS 証明書は、期限前通知のしきい値である 15 日に達しました。更新の進捗とインストール時間帯の確保を確認してください。"
+    },
+    "expiry_2": {
+      "label": "2 日前の通知",
+      "category": "expiry",
+      "subject": "至急：HTTPS 証明書 {{common_name}} が有効期限の 2 日前のしきい値に到達",
+      "text": "この HTTPS 証明書は、期限前通知のしきい値である 2 日に達しました。更新とインストールに直ちに対応してください。"
+    },
+    "expired": {
+      "label": "証明書の期限切れ",
+      "category": "expired",
+      "subject": "HTTPS 証明書の期限切れ：{{common_name}}",
+      "text": "この HTTPS 証明書の有効期間は終了しました。この証明書を提示するサービスは、TLS 検証に失敗する可能性があります。"
+    },
+    "expiry": {
+      "label": "カスタム期限前通知",
+      "category": "expiry",
+      "subject": "HTTPS 証明書 {{common_name}}：有効期限前のしきい値 {{threshold}} 日",
+      "text": "この HTTPS 証明書は、カスタムの期限前通知しきい値に達しました。以下の残り日数と日時を確認してください。"
+    },
+    "escalation": {
+      "label": "更新のエスカレーション",
+      "category": "escalation",
+      "subject": "HTTPS 証明書の更新エスカレーション：{{common_name}}",
+      "text": "この証明書の最初の通知が記録されてから、エスカレーションまでの待機期間が経過しました。未完了の更新およびインストール作業を確認してください。"
+    },
+    "certificate": {
+      "label": "署名済み証明書を利用可能",
+      "category": "certificate",
+      "subject": "{{common_name}} の署名済み HTTPS 証明書：有効期限 {{not_after}}",
+      "text": "{{common_name}} の署名済み HTTPS 証明書を添付しています。添付には公開証明書のみが含まれ、秘密鍵は含まれません。配布はインストール完了を意味しません。"
+    },
+    "unreachable": {
+      "label": "サービスに到達できません",
+      "category": "monitor",
+      "subject": "HTTPS サービスに到達できません：{{service_url}}",
+      "text": "自動チェックで HTTPS サービスに到達できませんでした。DNS 名前解決または TCP 接続の失敗により、証明書を取得できない場合があります。元の技術詳細を確認してください。"
+    },
+    "tls_error": {
+      "label": "TLS 接続エラー",
+      "category": "monitor",
+      "subject": "TLS 接続に失敗しました：{{service_url}}",
+      "text": "サービスへの接続で TLS ハンドシェイクが正常に完了しませんでした。証明書を取得できなかったか、セッションが中断された可能性があります。"
+    },
+    "changed": {
+      "label": "証明書が台帳と異なります",
+      "category": "monitor",
+      "subject": "HTTPS 証明書が変更されました：{{service_url}}",
+      "text": "サービスが提示する証明書のフィンガープリントが、台帳の期待値と異なります。更新証明書のインストール、または想定外の変更の可能性があります。新しい証明書は自動承認されません。"
+    },
+    "verification_error": {
+      "label": "証明書の検証に失敗",
+      "category": "monitor",
+      "subject": "HTTPS 証明書の検証に失敗しました：{{service_url}}",
+      "text": "サービスの証明書は取得できましたが、TLS の信頼性検証に失敗しました。結果を受け入れる前に、名前、有効期間、証明書チェーンを確認してください。"
+    },
+    "error": {
+      "label": "監視エラー",
+      "category": "monitor",
+      "subject": "HTTPS サービスのチェックエラー：{{service_url}}",
+      "text": "HTTPS サービスの自動チェックがエラーで終了しました。元の技術詳細を確認し、原因を特定してから再チェックしてください。"
+    },
+    "recovered": {
+      "label": "サービスが復旧しました",
+      "category": "recovered",
+      "subject": "HTTPS サービスが復旧しました：{{service_url}}",
+      "text": "最新のチェックで、HTTPS サービスが復旧していることを確認しました。技術的な復旧によって、問題対応の管理タスクが自動完了することはありません。"
+    }
+  }
+}

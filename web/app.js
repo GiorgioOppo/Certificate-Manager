@@ -1260,7 +1260,9 @@
       content.append(header, element('p', 'outbox-recipient', `${string(entry.recipient_name, msg('m_449c73e689f8'))} · ${string(entry.recipient_email)}`));
       if (entry.template_alert && entry.template_audience) {
         const templateLabel = `${i18n.t('mailTemplates.alert_' + entry.template_alert)} · ${i18n.t('mailTemplates.audience_' + entry.template_audience)}`;
-        content.append(element('p', 'outbox-meta', `${templateLabel}${entry.template_copy ? ' · ' + msg('mailTemplates.copy_badge') : ''}`));
+        const languageNames = { it: 'Italiano', en: 'English', fr: 'Français', es: 'Español', 'zh-CN': '中文', ja: '日本語' };
+        const language = Object.prototype.hasOwnProperty.call(languageNames, entry.template_language) ? ` · ${msg('mailTemplates.language_label')}: ${languageNames[entry.template_language]}` : '';
+        content.append(element('p', 'outbox-meta', `${templateLabel}${entry.template_copy ? ' · ' + msg('mailTemplates.copy_badge') : ''}${language}`));
       }
       content.append(element('p', 'outbox-meta', msg('m_9c83efbbd253', [entry.kind === 'certificate' ? msg('m_a9a635e1d23c') : entry.kind === 'monitor' ? flow('monitor_email') : entry.kind === 'escalation' ? flow('policy_title') : msg('m_9e66123dc753'), date(entry.created_at, true), entry.status === 'sent' ? msg('m_fd6fc605af8e', [date(entry.sent_at, true)]) : '', Number(entry.attempts) || 0])));
       if (entry.last_error) content.append(element('p', 'outbox-error', string(entry.last_error)));

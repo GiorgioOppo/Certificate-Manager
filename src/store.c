@@ -15,7 +15,7 @@
 #include <unistd.h>
 #endif
 
-#define STORE_SCHEMA_VERSION 7
+#define STORE_SCHEMA_VERSION 8
 
 static void set_error(char *err, size_t errlen, const char *message)
 {
@@ -149,6 +149,21 @@ static int validate_schema(Store *store, int version, char *err, size_t errlen)
             "SELECT id,self_name,self_email,updated_at FROM mail_template_settings LIMIT 0",
             "SELECT alert,audience,subject,body,copy_enabled,updated_at FROM mail_templates LIMIT 0",
             "SELECT template_alert,template_audience,template_copy FROM outbox LIMIT 0"
+        };
+        for (size_t j = 0; j < sizeof checks / sizeof checks[0]; j++) {
+            sqlite3_stmt *stmt = NULL;
+            if (sqlite3_prepare_v2(store->db, checks[j], -1, &stmt, NULL) != SQLITE_OK)
+                return db_error(store, err, errlen);
+            int ok = sqlite3_step(stmt) == SQLITE_DONE;
+            sqlite3_finalize(stmt);
+            if (!ok) return db_error(store, err, errlen);
+        }
+    }
+    if (version >= 8) {
+        const char *checks[] = {
+            "SELECT language,customized FROM mail_templates LIMIT 0",
+            "SELECT alert,audience,language,subject,body,updated_at FROM mail_template_variants LIMIT 0",
+            "SELECT template_language FROM outbox LIMIT 0"
         };
         for (size_t j = 0; j < sizeof checks / sizeof checks[0]; j++) {
             sqlite3_stmt *stmt = NULL;
@@ -406,6 +421,12 @@ int store_open(Store *store, const char *path, char *err, size_t errlen)
                  store_exec(store, mail_templates_schema(), err, errlen) &&
                  store_exec(store, "PRAGMA user_version=7", err, errlen);
             version = 7;
+        }
+        if (ok && version == 7) {
+            ok = validate_schema(store, 7, err, errlen) &&
+                 store_exec(store, mail_templates_schema_v8(), err, errlen) &&
+                 store_exec(store, "PRAGMA user_version=8", err, errlen);
+            version = 8;
         }
         if (ok) ok = version == STORE_SCHEMA_VERSION &&
                      validate_schema(store, STORE_SCHEMA_VERSION, err, errlen) &&

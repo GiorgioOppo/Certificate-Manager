@@ -10,6 +10,7 @@ WORKDIR /src
 COPY Makefile ./
 COPY src/ ./src/
 COPY scripts/embed_assets.py ./scripts/embed_assets.py
+COPY scripts/embed_mail_templates.py ./scripts/embed_mail_templates.py
 COPY web/ ./web/
 RUN make -j2
 

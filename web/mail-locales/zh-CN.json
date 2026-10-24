@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "language": "zh-CN",
+  "label_native": "简体中文",
+  "demo_recipient": "演示收件人",
+  "demo_message": "演示示例：请检查 HTTPS 服务及其提供的证书。",
+  "event_message_label": "原始技术详情",
+  "footer": "此邮件由 {{app_name}} 生成。所有日期均使用 UTC 时间。",
+  "fields": {
+    "common_name": "通用名称（CN）",
+    "not_before": "签发日期",
+    "not_after": "到期日期",
+    "days_remaining": "剩余天数",
+    "threshold": "提醒阈值（天）",
+    "fingerprint": "证书指纹",
+    "serial": "序列号",
+    "issuer": "签发者",
+    "root_ca": "根 CA",
+    "intermediate_ca": "中间 CA",
+    "sans": "使用者备用名称（SAN）",
+    "service_url": "HTTPS 服务",
+    "event_type": "事件类型",
+    "event_message": "原始技术详情",
+    "expected_fingerprint": "预期指纹",
+    "observed_fingerprint": "观测到的指纹"
+  },
+  "audiences": {
+    "self": {
+      "label": "管理员",
+      "subject_prefix": "【个人】",
+      "greeting": "{{recipient_name}}，您好！以下是您的个人摘要：",
+      "actions": {
+        "expiry": "请与证书负责人协调续期，并在登记库中核查任务负责人、操作日期和需要更新的服务。",
+        "expired": "请立即协调证书续期及受影响服务的恢复，并向技术负责人确认处理进度。",
+        "escalation": "请联系续期负责人，明确尚未完成的任务，并更新操作期限。",
+        "certificate": "请协调已签名证书的交付和安装，并在关闭续期任务前核查完成清单。",
+        "monitor": "请安排技术负责人检查服务并跟进异常处理。对于非预期证书，必须进行明确审核。",
+        "recovered": "请与技术负责人确认服务已恢复，并在登记库中更新异常的处理状态。"
+      }
+    },
+    "business": {
+      "label": "业务负责人",
+      "subject_prefix": "【业务负责人】",
+      "greeting": "{{recipient_name}}，您好！",
+      "actions": {
+        "expiry": "请与技术负责人制定续期计划，并确认申请、交付和安装日期。",
+        "expired": "请立即联系技术负责人续期证书，并评估对服务的影响。",
+        "escalation": "请与技术负责人确认续期计划，并报告任何阻碍或延误。",
+        "certificate": "请与技术负责人商定已签名证书的安装窗口，并确认任务已完成。",
+        "monitor": "请与技术负责人安排服务检查，并评估对业务的影响。",
+        "recovered": "请与技术负责人确认服务已恢复运行，并检查是否仍有残留影响。"
+      }
+    },
+    "technical": {
+      "label": "技术负责人",
+      "subject_prefix": "【技术负责人】",
+      "greeting": "{{recipient_name}}，您好！",
+      "actions": {
+        "expiry": "请准备续期，并安排在相关服务上安装证书。安装后，请核查服务提供的证书链、名称和指纹。",
+        "expired": "请立即续期并安装证书。核查每个受影响的服务，并记录安装验证证据。",
+        "escalation": "请核查申请与安装进度，解决阻碍，并更新续期记录。",
+        "certificate": "请安装已签名证书及所需证书链。核查各服务提供的证书指纹，并完成续期清单。",
+        "monitor": "请检查可达性、TLS 握手、证书链及服务提供的指纹。在批准其他证书前，请将结果与登记库进行比较。",
+        "recovered": "请确认服务可达且通过 TLS 验证，核查服务提供的证书，并记录结果。"
+      }
+    },
+    "other": {
+      "label": "收件人",
+      "subject_prefix": "【通知】",
+      "greeting": "{{recipient_name}}，您好！",
+      "actions": {
+        "expiry": "请联系证书负责人，商定续期和安装日期。",
+        "expired": "请立即通知证书负责人，并商定续期及服务检查工作。",
+        "escalation": "请联系续期负责人，明确尚未完成的任务。",
+        "certificate": "请与技术负责人商定已签名证书的交付和安装。",
+        "monitor": "请通知服务负责人，并安排对异常进行技术检查。",
+        "recovered": "请与服务负责人商定恢复确认及异常关闭事宜。"
+      }
+    }
+  },
+  "alerts": {
+    "expiry_45": {
+      "label": "提前 45 天提醒",
+      "category": "expiry",
+      "subject": "HTTPS 证书 {{common_name}}：到期前 45 天提醒",
+      "text": "此 HTTPS 证书已达到提前 45 天的提醒阈值。请开始制定续期计划。"
+    },
+    "expiry_30": {
+      "label": "提前 30 天提醒",
+      "category": "expiry",
+      "subject": "HTTPS 证书 {{common_name}}：到期前 30 天提醒",
+      "text": "此 HTTPS 证书已达到提前 30 天的提醒阈值。请确认已安排续期申请和安装工作。"
+    },
+    "expiry_15": {
+      "label": "提前 15 天提醒",
+      "category": "expiry",
+      "subject": "HTTPS 证书 {{common_name}}：到期前 15 天提醒",
+      "text": "此 HTTPS 证书已达到提前 15 天的提醒阈值。请核查续期进度，并确认有可用的安装窗口。"
+    },
+    "expiry_2": {
+      "label": "提前 2 天提醒",
+      "category": "expiry",
+      "subject": "紧急：HTTPS 证书 {{common_name}} 已达到到期前 2 天阈值",
+      "text": "此 HTTPS 证书已达到提前 2 天的提醒阈值。续期和安装需要立即处理。"
+    },
+    "expired": {
+      "label": "证书已过期",
+      "category": "expired",
+      "subject": "HTTPS 证书已过期：{{common_name}}",
+      "text": "此 HTTPS 证书的有效期已结束。仍提供此证书的服务可能无法通过 TLS 验证。"
+    },
+    "expiry": {
+      "label": "自定义到期提醒",
+      "category": "expiry",
+      "subject": "HTTPS 证书 {{common_name}}：到期前 {{threshold}} 天阈值",
+      "text": "此 HTTPS 证书已达到自定义提醒阈值。请查看下方的剩余天数及日期。"
+    },
+    "escalation": {
+      "label": "续期升级提醒",
+      "category": "escalation",
+      "subject": "HTTPS 证书续期升级提醒：{{common_name}}",
+      "text": "自此证书首次记录的提醒起，设定的升级等待期已结束。请核查尚未完成的续期和安装工作。"
+    },
+    "certificate": {
+      "label": "已签名证书可用",
+      "category": "certificate",
+      "subject": "{{common_name}} 的已签名 HTTPS 证书：有效期至 {{not_after}}",
+      "text": "{{common_name}} 的已签名 HTTPS 证书见附件。附件仅包含公开证书，不包含私钥。交付并不代表已完成安装。"
+    },
+    "unreachable": {
+      "label": "服务不可达",
+      "category": "monitor",
+      "subject": "HTTPS 服务不可达：{{service_url}}",
+      "text": "自动检查无法访问此 HTTPS 服务。DNS 解析失败或 TCP 连接失败可能导致无法获取证书。请查看原始技术详情。"
+    },
+    "tls_error": {
+      "label": "TLS 连接错误",
+      "category": "monitor",
+      "subject": "TLS 连接失败：{{service_url}}",
+      "text": "与此服务的连接未能成功完成 TLS 握手。证书可能尚未获取，或者会话可能已中断。"
+    },
+    "changed": {
+      "label": "证书与登记库不一致",
+      "category": "monitor",
+      "subject": "HTTPS 证书已变更：{{service_url}}",
+      "text": "服务提供的证书指纹与登记库中的预期指纹不同。这可能是已安装的续期证书，也可能是非预期变更；新证书不会被自动批准。"
+    },
+    "verification_error": {
+      "label": "证书验证失败",
+      "category": "monitor",
+      "subject": "HTTPS 证书验证失败：{{service_url}}",
+      "text": "已获取服务证书，但 TLS 信任验证失败。在接受此结果前，请核查名称、有效期及证书链。"
+    },
+    "error": {
+      "label": "监控错误",
+      "category": "monitor",
+      "subject": "HTTPS 服务检查错误：{{service_url}}",
+      "text": "HTTPS 服务自动检查因错误而结束。请查看原始技术详情，确定原因后重新检查。"
+    },
+    "recovered": {
+      "label": "服务已恢复",
+      "category": "recovered",
+      "subject": "HTTPS 服务已恢复：{{service_url}}",
+      "text": "最近一次检查表明此 HTTPS 服务已恢复运行。技术层面的恢复不会自动关闭异常处理任务。"
+    }
+  }
+}

@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "language": "fr",
+  "label_native": "Français",
+  "demo_recipient": "Destinataire de démonstration",
+  "demo_message": "Exemple de démonstration : vérifier le service HTTPS et le certificat présenté.",
+  "event_message_label": "Détails techniques d’origine",
+  "footer": "Message généré par {{app_name}}. Les dates sont exprimées en UTC.",
+  "fields": {
+    "common_name": "Nom commun (CN)",
+    "not_before": "Date d’émission",
+    "not_after": "Date d’expiration",
+    "days_remaining": "Jours restants",
+    "threshold": "Seuil de rappel (jours)",
+    "fingerprint": "Empreinte du certificat",
+    "serial": "Numéro de série",
+    "issuer": "Émetteur",
+    "root_ca": "AC racine",
+    "intermediate_ca": "AC intermédiaire",
+    "sans": "Noms alternatifs du sujet (SAN)",
+    "service_url": "Service HTTPS",
+    "event_type": "Type d’événement",
+    "event_message": "Détails techniques d’origine",
+    "expected_fingerprint": "Empreinte attendue",
+    "observed_fingerprint": "Empreinte observée"
+  },
+  "audiences": {
+    "self": {
+      "label": "Administrateur",
+      "subject_prefix": "[Personnel] ",
+      "greeting": "Récapitulatif personnel pour {{recipient_name}},",
+      "actions": {
+        "expiry": "Coordonnez le renouvellement avec les référents et vérifiez le responsable, les dates opérationnelles et les services concernés dans le registre.",
+        "expired": "Coordonnez en urgence le renouvellement et le rétablissement des services concernés. Vérifiez l’avancement avec les référents techniques.",
+        "escalation": "Contactez les responsables du renouvellement, clarifiez les tâches restantes et mettez à jour les échéances opérationnelles.",
+        "certificate": "Coordonnez la remise et l’installation du certificat signé. Vérifiez la liste de contrôle avant de clôturer le renouvellement.",
+        "monitor": "Confiez la vérification du service à un référent technique et suivez la résolution de l’anomalie. Un certificat inattendu nécessite un examen explicite.",
+        "recovered": "Confirmez le rétablissement avec les référents techniques et mettez à jour le statut opérationnel de l’anomalie dans le registre."
+      }
+    },
+    "business": {
+      "label": "Référent",
+      "subject_prefix": "[Référent] ",
+      "greeting": "Bonjour {{recipient_name}},",
+      "actions": {
+        "expiry": "Planifiez le renouvellement avec le référent technique et confirmez les dates de demande, de remise et d’installation.",
+        "expired": "Contactez en urgence le référent technique pour renouveler le certificat et évaluer les conséquences sur les services.",
+        "escalation": "Confirmez le plan de renouvellement avec le référent technique et signalez les obstacles ou les retards.",
+        "certificate": "Convenez d’une fenêtre d’installation du certificat signé avec le référent technique et vérifiez l’achèvement de l’intervention.",
+        "monitor": "Organisez la vérification du service avec le référent technique et évaluez l’impact sur l’activité.",
+        "recovered": "Confirmez avec le référent technique que le service fonctionne à nouveau et vérifiez les éventuelles conséquences restantes."
+      }
+    },
+    "technical": {
+      "label": "Référent technique",
+      "subject_prefix": "[Technique] ",
+      "greeting": "Bonjour {{recipient_name}},",
+      "actions": {
+        "expiry": "Préparez le renouvellement et planifiez l’installation sur les services concernés. Après l’installation, vérifiez la chaîne, les noms et l’empreinte du certificat présenté.",
+        "expired": "Renouvelez et installez le certificat en urgence. Vérifiez chaque service concerné et consignez les preuves d’installation.",
+        "escalation": "Vérifiez l’avancement de la demande et de l’installation, résolvez les blocages et mettez à jour le dossier de renouvellement.",
+        "certificate": "Installez le certificat signé et la chaîne nécessaire. Vérifiez l’empreinte présentée par chaque service et complétez la liste de contrôle du renouvellement.",
+        "monitor": "Vérifiez l’accessibilité, la négociation TLS, la chaîne et l’empreinte présentée. Comparez le résultat au registre avant d’approuver un autre certificat.",
+        "recovered": "Confirmez l’accessibilité et la validation TLS, vérifiez le certificat présenté et consignez le résultat."
+      }
+    },
+    "other": {
+      "label": "Destinataire",
+      "subject_prefix": "[Notification] ",
+      "greeting": "Bonjour {{recipient_name}},",
+      "actions": {
+        "expiry": "Contactez les référents du certificat pour convenir du renouvellement et des dates d’installation.",
+        "expired": "Prévenez en urgence les référents du certificat et convenez des tâches de renouvellement et de vérification des services.",
+        "escalation": "Contactez les responsables du renouvellement pour clarifier les tâches restantes.",
+        "certificate": "Convenez de la remise et de l’installation du certificat signé avec les référents techniques.",
+        "monitor": "Prévenez les référents du service et organisez la vérification technique de l’anomalie.",
+        "recovered": "Convenez avec les référents du service de la confirmation du rétablissement et de la clôture de l’anomalie."
+      }
+    }
+  },
+  "alerts": {
+    "expiry_45": {
+      "label": "Rappel à 45 jours",
+      "category": "expiry",
+      "subject": "Certificat HTTPS {{common_name}} : seuil d’expiration de 45 jours",
+      "text": "Ce certificat HTTPS a atteint le seuil de rappel de 45 jours. Commencez à planifier son renouvellement."
+    },
+    "expiry_30": {
+      "label": "Rappel à 30 jours",
+      "category": "expiry",
+      "subject": "Certificat HTTPS {{common_name}} : seuil d’expiration de 30 jours",
+      "text": "Ce certificat HTTPS a atteint le seuil de rappel de 30 jours. Confirmez que la demande de renouvellement et l’installation sont planifiées."
+    },
+    "expiry_15": {
+      "label": "Rappel à 15 jours",
+      "category": "expiry",
+      "subject": "Certificat HTTPS {{common_name}} : seuil d’expiration de 15 jours",
+      "text": "Ce certificat HTTPS a atteint le seuil de rappel de 15 jours. Vérifiez l’avancement du renouvellement et la disponibilité d’une fenêtre d’installation."
+    },
+    "expiry_2": {
+      "label": "Rappel à 2 jours",
+      "category": "expiry",
+      "subject": "Urgent : certificat HTTPS {{common_name}}, seuil d’expiration de 2 jours",
+      "text": "Ce certificat HTTPS a atteint le seuil de rappel de 2 jours. Le renouvellement et l’installation nécessitent une intervention immédiate."
+    },
+    "expired": {
+      "label": "Certificat expiré",
+      "category": "expired",
+      "subject": "Certificat HTTPS expiré : {{common_name}}",
+      "text": "La période de validité de ce certificat HTTPS est terminée. Les services qui le présentent risquent d’échouer à la validation TLS."
+    },
+    "expiry": {
+      "label": "Rappel d’expiration personnalisé",
+      "category": "expiry",
+      "subject": "Certificat HTTPS {{common_name}} : seuil d’expiration de {{threshold}} jours",
+      "text": "Ce certificat HTTPS a atteint le seuil de rappel personnalisé. Consultez le nombre de jours restants et les dates ci-dessous."
+    },
+    "escalation": {
+      "label": "Escalade du renouvellement",
+      "category": "escalation",
+      "subject": "Escalade du renouvellement du certificat HTTPS {{common_name}}",
+      "text": "Le délai d’escalade depuis le premier rappel enregistré pour ce certificat est écoulé. Vérifiez les tâches de renouvellement et d’installation encore ouvertes."
+    },
+    "certificate": {
+      "label": "Certificat signé disponible",
+      "category": "certificate",
+      "subject": "Certificat HTTPS signé pour {{common_name}} : valable jusqu’au {{not_after}}",
+      "text": "Le certificat HTTPS signé pour {{common_name}} est disponible en pièce jointe. La pièce jointe contient uniquement des certificats publics, sans clé privée. La remise ne confirme pas l’installation."
+    },
+    "unreachable": {
+      "label": "Service inaccessible",
+      "category": "monitor",
+      "subject": "Service HTTPS inaccessible : {{service_url}}",
+      "text": "Le contrôle automatique n’a pas pu joindre le service HTTPS. Un échec de résolution DNS ou de connexion TCP peut empêcher la récupération du certificat. Consultez les détails techniques d’origine."
+    },
+    "tls_error": {
+      "label": "Erreur de connexion TLS",
+      "category": "monitor",
+      "subject": "Échec de la connexion TLS : {{service_url}}",
+      "text": "La connexion au service n’a pas terminé correctement la négociation TLS. Le certificat peut ne pas avoir été récupéré ou la session peut avoir été interrompue."
+    },
+    "changed": {
+      "label": "Certificat différent du registre",
+      "category": "monitor",
+      "subject": "Certificat HTTPS modifié : {{service_url}}",
+      "text": "Le service présente un certificat dont l’empreinte diffère de celle attendue dans le registre. Il peut s’agir d’un renouvellement installé ou d’une modification inattendue ; le nouveau certificat n’est pas approuvé automatiquement."
+    },
+    "verification_error": {
+      "label": "Échec de validation du certificat",
+      "category": "monitor",
+      "subject": "Échec de validation du certificat HTTPS : {{service_url}}",
+      "text": "Le certificat du service a été récupéré, mais la validation de confiance TLS a échoué. Vérifiez les noms, la validité et la chaîne de certification avant d’accepter le résultat."
+    },
+    "error": {
+      "label": "Erreur de surveillance",
+      "category": "monitor",
+      "subject": "Erreur de contrôle HTTPS : {{service_url}}",
+      "text": "Le contrôle automatique du service HTTPS s’est terminé par une erreur. Consultez les détails techniques d’origine et répétez la vérification après en avoir identifié la cause."
+    },
+    "recovered": {
+      "label": "Service rétabli",
+      "category": "recovered",
+      "subject": "Service HTTPS rétabli : {{service_url}}",
+      "text": "Le dernier contrôle indique que le service HTTPS fonctionne à nouveau. Le rétablissement technique ne clôture pas automatiquement la tâche de gestion de l’anomalie."
+    }
+  }
+}
