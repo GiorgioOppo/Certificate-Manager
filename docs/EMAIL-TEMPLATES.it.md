@@ -104,3 +104,9 @@ Controlla l’anteprima anche con i dati del registro: un modello breve può pro
 L’anteprima e il salvataggio dei modelli non abilitano SMTP. Gli invii richiedono una configurazione SMTP abilitata nella stessa pagina; senza di essa i messaggi restano in coda. Lo stato Inviata indica accettazione da parte del server SMTP, non ricezione né installazione del certificato.
 
 I modelli e l’indirizzo personale sono compresi nel backup del database. Lo schema **v7** migra automaticamente la versione 6, conservando la coda e lo storico e senza abilitare copie aggiuntive. Prima dell’aggiornamento arresta tutti i processi dell’applicazione e salva database e chiave `<archivio>.smtp.key`, se presente. L’interfaccia mantiene il modello di accesso locale esistente: non offre utenti autenticati o ruoli di autorizzazione.
+
+## Compatibilità SMTP verificata
+
+La suite nativa usa Ubuntu **24.04**; il container distribuito usa Debian **12**. I test locali sono eseguiti anche su macOS. L’ambiente del job Docker rimane `ubuntu-latest`, mentre quello della suite nativa è fissato per rendere riproducibili le dipendenze.
+
+Su Ubuntu **26.04**, con libcurl **8.18.0-1ubuntu2.8**, il test locale della verifica di connessione SMTP termina immediatamente prima del saluto del server. Lo stesso risultato è stato riprodotto [sulla versione precedente ai template](https://github.com/GiorgioOppo/Certificate-Manager/actions/runs/39662622964), oltre che [nella prova con diagnostica](https://github.com/GiorgioOppo/Certificate-Manager/actions/runs/40076923232). Questo ambiente non è validato per SMTP; per l’esecuzione Linux usa il container fornito o Ubuntu 24.04. La causa nella combinazione di librerie rimane da approfondire.

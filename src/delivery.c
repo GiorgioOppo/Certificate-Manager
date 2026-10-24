@@ -823,9 +823,6 @@ int delivery_test_connection(const SmtpSettings *settings, char *err, size_t n)
     char diagnostics[CURL_ERROR_SIZE] = {0};
     CURLcode result = smtp_options(curl, settings, url, 10L);
     if (result == CURLE_OK) result = curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, diagnostics);
-    /* Bound each greeting/AUTH response explicitly as well as the complete
-     * connection probe. This never extends the overall ten-second deadline. */
-    if (result == CURLE_OK) result = curl_easy_setopt(curl, CURLOPT_SERVER_RESPONSE_TIMEOUT, 5L);
     /* SMTP greeting, TLS and AUTH are part of connection setup in libcurl.
        No MAIL FROM, recipients or upload is configured for this handle. */
     if (result == CURLE_OK) result = curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 1L);
