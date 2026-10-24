@@ -43,7 +43,7 @@ static int materialize(Store *s,char *err,size_t n) {
         "INSERT OR IGNORE INTO directory_assignments(certificate_id,role,person_id,group_id) SELECT c.certificate_id,c.role,m.person_id,c.group_id FROM certificate_groups c JOIN directory_memberships m ON m.group_id=c.group_id;"
         "DELETE FROM contacts;"
         "INSERT INTO contacts(certificate_id,role,name,email) SELECT DISTINCT a.certificate_id,a.role,p.name,p.email FROM directory_assignments a JOIN directory_people p ON p.id=a.person_id;"
-        "DELETE FROM outbox WHERE status IN('pending','failed') AND kind IN('expiry','certificate') AND NOT EXISTS(SELECT 1 FROM contacts c WHERE c.certificate_id=outbox.certificate_id AND c.email=outbox.recipient_email COLLATE NOCASE AND c.role=CASE outbox.kind WHEN 'expiry' THEN 'business' ELSE 'technical' END);";
+        "DELETE FROM outbox WHERE status IN('pending','failed') AND kind IN('expiry','certificate') AND template_copy=0 AND NOT EXISTS(SELECT 1 FROM contacts c WHERE c.certificate_id=outbox.certificate_id AND c.email=outbox.recipient_email COLLATE NOCASE AND c.role=CASE outbox.kind WHEN 'expiry' THEN 'business' ELSE 'technical' END);";
     if(!store_exec(s,sql,err,n)) return 0;
     sqlite3_stmt *q=NULL;
     int ok=sqlite3_prepare_v2(s->db,"SELECT 1 FROM contacts GROUP BY certificate_id HAVING count(*)>100 LIMIT 1",-1,&q,NULL)==SQLITE_OK;
@@ -92,7 +92,7 @@ int workspace_save_person(Store *s,int64_t id,const char *name,const char *email
     sqlite3_finalize(q);q=NULL;
     if(ok && !id) id=sqlite3_last_insert_rowid(s->db);
     if(ok && old && strcasecmp(old,email)) {
-        const char *updates[]={"UPDATE reminder_policies SET escalation_email=?1 WHERE escalation_email=?2 COLLATE NOCASE", "UPDATE OR IGNORE monitor_recipients SET email=?1 WHERE email=?2 COLLATE NOCASE", "UPDATE OR IGNORE outbox SET recipient_email=?1 WHERE recipient_email=?2 COLLATE NOCASE AND status IN('pending','failed')", "DELETE FROM monitor_recipients WHERE email=?2 COLLATE NOCASE", "DELETE FROM outbox WHERE recipient_email=?2 COLLATE NOCASE AND status IN('pending','failed')"};
+        const char *updates[]={"UPDATE reminder_policies SET escalation_email=?1 WHERE escalation_email=?2 COLLATE NOCASE", "UPDATE OR IGNORE monitor_recipients SET email=?1 WHERE email=?2 COLLATE NOCASE", "UPDATE OR IGNORE outbox SET recipient_email=?1 WHERE recipient_email=?2 COLLATE NOCASE AND status IN('pending','failed') AND NOT(template_copy=1 AND template_audience='self')", "DELETE FROM monitor_recipients WHERE email=?2 COLLATE NOCASE", "DELETE FROM outbox WHERE recipient_email=?2 COLLATE NOCASE AND status IN('pending','failed') AND NOT(template_copy=1 AND template_audience='self')"};
         for(size_t i=0;i<sizeof updates/sizeof updates[0] && ok;i++) {
             ok=sqlite3_prepare_v2(s->db,updates[i],-1,&q,NULL)==SQLITE_OK && sqlite3_bind_text(q,1,email,-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_bind_text(q,2,old,-1,SQLITE_TRANSIENT)==SQLITE_OK && sqlite3_step(q)==SQLITE_DONE;
             if(!ok) failure(s,err,n);
@@ -122,7 +122,7 @@ int workspace_remove_person(Store *s,int64_t id,char *err,size_t n) {
     if(!exists(s,"directory_people",id)){snprintf(err,n,"Persona non trovata.");return 0;}
     int outer=sqlite3_get_autocommit(s->db);
     if(!store_exec(s,"SAVEPOINT workspace",err,n))return 0;
-    int ok=statement(s,"DELETE FROM monitor_recipients WHERE email IN(SELECT email FROM directory_people WHERE id=?1)",id,err,n)&&statement(s,"UPDATE reminder_policies SET escalation_email='' WHERE escalation_email COLLATE NOCASE IN(SELECT email FROM directory_people WHERE id=?1)",id,err,n)&&statement(s,"DELETE FROM outbox WHERE status IN('pending','failed') AND recipient_email COLLATE NOCASE IN(SELECT email FROM directory_people WHERE id=?1)",id,err,n)&&statement(s,"DELETE FROM directory_people WHERE id=?1",id,err,n)&&materialize(s,err,n);
+    int ok=statement(s,"DELETE FROM monitor_recipients WHERE email IN(SELECT email FROM directory_people WHERE id=?1)",id,err,n)&&statement(s,"UPDATE reminder_policies SET escalation_email='' WHERE escalation_email COLLATE NOCASE IN(SELECT email FROM directory_people WHERE id=?1)",id,err,n)&&statement(s,"DELETE FROM outbox WHERE status IN('pending','failed') AND NOT(template_copy=1 AND template_audience='self') AND recipient_email COLLATE NOCASE IN(SELECT email FROM directory_people WHERE id=?1)",id,err,n)&&statement(s,"DELETE FROM directory_people WHERE id=?1",id,err,n)&&materialize(s,err,n);
     return finish(s,ok,outer,err,n);
 }
 int workspace_remove_group(Store *s,int64_t id,char *err,size_t n) {

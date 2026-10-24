@@ -414,7 +414,7 @@ char *app_state_json(Store *s, const char *token, size_t *length,
     if (ok) {
         fputs(",\"outbox\":", out);
         ok = json_rows(s, out, "SELECT id,certificate_id,kind,recipient_name,recipient_email,threshold,subject,"
-                       "status,attempts,last_error,created_at,sent_at,event_id FROM outbox ORDER BY id DESC LIMIT 200",
+                       "status,attempts,last_error,created_at,sent_at,event_id,template_alert,template_audience,template_copy FROM outbox ORDER BY id DESC LIMIT 200",
                        0, now, err, n);
     }
     if (ok) {

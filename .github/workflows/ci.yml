@@ -32,6 +32,7 @@ jobs:
           node --check web/extensions.js
           node --check web/operations-ui.js
           node --check web/incidents-ui.js
+          node --check web/mail-templates-ui.js
       - name: Build and run tests
         run: make test
 

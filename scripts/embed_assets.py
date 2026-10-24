@@ -67,7 +67,7 @@ def load_catalogs(root):
             if sorted(re.findall(r"\{\d+\}", text)) != sorted(re.findall(r"\{\d+\}", source[key])):
                 raise ValueError(f"Translation placeholders differ: {language}/{key}")
     template = (root / "web" / "index.html").read_text(encoding="utf-8")
-    app = '\n'.join((root / "web" / filename).read_text(encoding="utf-8") for filename in ("app.js","extensions.js","operations-ui.js","incidents-ui.js"))
+    app = '\n'.join((root / "web" / filename).read_text(encoding="utf-8") for filename in ("app.js","extensions.js","operations-ui.js","incidents-ui.js","mail-templates-ui.js"))
     references = set(re.findall(r'data-i18n(?:-[a-z-]+)?="([^"]+)"', template))
     references.update(re.findall(r"\bmsg\('([^']+)'", app))
     server_keys = json.loads((root / "web" / "server-messages.json").read_text(encoding="utf-8"))
@@ -218,6 +218,7 @@ def main():
     assets.extend((name, (root / "web" / filename).read_bytes()) for name, filename in (
         ("app_css", "app.css"), ("app_js", "app.js"), ("i18n_js", "i18n.js"), ("extensions_js", "extensions.js"),
         ("operations_ui_js", "operations-ui.js"), ("incidents_ui_js", "incidents-ui.js"),
+        ("mail_templates_ui_js", "mail-templates-ui.js"),
     ))
     catalog_script = "window.CertificateManagerCatalogs=" + json.dumps(catalogs, ensure_ascii=False, separators=(",", ":")) + ";\n"
     catalog_script += "window.CertificateManagerServerMessages=" + json.dumps(server_keys) + ";\n"

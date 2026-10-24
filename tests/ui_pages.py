@@ -137,7 +137,7 @@ class UiPagesTests(unittest.TestCase):
         self.assertEqual(status, 403)
 
     def test_shared_assets_remain_available_with_security_headers(self):
-        for path, content_type in (("/app.css", "text/css"), ("/app.js", "text/javascript")):
+        for path, content_type in (("/app.css", "text/css"), ("/app.js", "text/javascript"), ("/mail-templates-ui.js", "text/javascript")):
             with self.subTest(path=path):
                 status, headers, content = self.http("GET", path)
                 self.assertEqual(status, 200, content)
@@ -145,6 +145,18 @@ class UiPagesTests(unittest.TestCase):
                 self.assertTrue(content)
                 self.assertEqual(headers.get("X-Content-Type-Options"), "nosniff")
                 self.assertIn("default-src 'self'", headers.get("Content-Security-Policy", ""))
+
+    def test_mail_template_editor_is_only_on_the_email_page(self):
+        status, _, content = self.http("GET", "/email?lang=it")
+        self.assertEqual(status, 200, content)
+        document = PageDocument(content)
+        self.assertIn("mail-templates-panel", document.ids)
+        self.assertIn("/mail-templates-ui.js", document.asset_urls)
+        for path in PAGES:
+            if path != "/email":
+                status, _, content = self.http("GET", path)
+                self.assertEqual(status, 200, content)
+                self.assertNotIn("mail-templates-panel", PageDocument(content).ids)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ CPPFLAGS += -D_POSIX_C_SOURCE=200809L -Isrc -Ibuild $(shell $(PKG_CONFIG) --cfla
 CFLAGS ?= -O2 -g
 CFLAGS += -std=c11 -Wall -Wextra -Wpedantic
 LDLIBS += $(shell $(PKG_CONFIG) --libs openssl sqlite3 libcurl)
-SOURCES = src/main.c src/app.c src/server.c src/certificate.c src/store.c src/chain.c src/delivery.c src/remote.c src/remote_service.c src/monitor.c src/smtp_settings.c src/lifecycle.c src/workspace.c src/workflow_support.c src/inventory.c src/operations.c src/incident.c
+SOURCES = src/main.c src/app.c src/server.c src/certificate.c src/store.c src/chain.c src/delivery.c src/remote.c src/remote_service.c src/monitor.c src/smtp_settings.c src/lifecycle.c src/workspace.c src/workflow_support.c src/inventory.c src/operations.c src/incident.c src/mail_templates.c
 OBJECTS = $(SOURCES:src/%.c=build/%.o)
 LIB_OBJECTS = $(filter-out build/main.o build/server.o,$(OBJECTS))
 
@@ -16,7 +16,7 @@ all: certificati
 certificati: $(OBJECTS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJECTS) $(LDLIBS)
 
-build/assets.h: scripts/embed_assets.py web/index.html web/app.css web/app.js web/extensions.js web/operations-ui.js web/incidents-ui.js web/i18n.js web/server-messages.json $(wildcard web/locales/*.json)
+build/assets.h: scripts/embed_assets.py web/index.html web/app.css web/app.js web/extensions.js web/operations-ui.js web/incidents-ui.js web/mail-templates-ui.js web/i18n.js web/server-messages.json $(wildcard web/locales/*.json)
 	$(PYTHON) scripts/embed_assets.py $@
 
 build/server.o: build/assets.h
@@ -36,13 +36,17 @@ build/test_lifecycle: tests/test_lifecycle.c $(LIB_OBJECTS)
 build/test_incidents: tests/test_incidents.c $(LIB_OBJECTS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-test: certificati build/test_reminders build/test_delivery build/test_lifecycle build/test_incidents
+build/test_mail_templates: tests/test_mail_templates.c $(LIB_OBJECTS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+test: certificati build/test_reminders build/test_delivery build/test_lifecycle build/test_incidents build/test_mail_templates
 	$(NODE) tests/test_i18n.cjs
 	$(NODE) tests/test_inventory.cjs
 	./build/test_reminders
 	./build/test_delivery
 	./build/test_lifecycle
 	./build/test_incidents
+	./build/test_mail_templates
 	$(PYTHON) tests/integration.py
 	$(PYTHON) tests/lifecycle_integration.py
 	$(PYTHON) tests/workspace_integration.py
@@ -55,6 +59,7 @@ test: certificati build/test_reminders build/test_delivery build/test_lifecycle 
 	$(PYTHON) tests/inventory_integration.py
 	$(PYTHON) tests/operations_integration.py
 	$(PYTHON) tests/incidents_integration.py
+	$(PYTHON) tests/mail_templates_integration.py
 
 clean:
 	rm -rf build certificati

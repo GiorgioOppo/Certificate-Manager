@@ -264,7 +264,7 @@ class SmtpSettingsTests(unittest.TestCase):
         columns = {table: [row["name"] for row in self.rows(f"PRAGMA table_info({table})")] for table in tables}
         before = {table: self.rows(f"SELECT * FROM {table} ORDER BY rowid") for table in tables}
         self.start()
-        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 6)
+        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 7)
         self.assertEqual(self.state()["smtp"]["source"], "none")
         for table in tables:
             legacy_columns = ",".join(columns[table])
@@ -292,7 +292,7 @@ class SmtpSettingsTests(unittest.TestCase):
         columns = {table: [row["name"] for row in self.rows(f"PRAGMA table_info({table})")] for table in tables}
         before = {table: self.rows(f"SELECT * FROM {table} ORDER BY rowid") for table in tables}
         self.start()
-        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 6)
+        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 7)
         for table in tables:
             self.assertEqual(self.rows(f"SELECT {','.join(columns[table])} FROM {table} ORDER BY rowid"), before[table], table)
         self.assertEqual(self.key_path().read_bytes(), key_before)

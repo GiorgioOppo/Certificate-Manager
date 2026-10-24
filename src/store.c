@@ -3,6 +3,7 @@
 #include "inventory.h"
 #include "operations.h"
 #include "incident.h"
+#include "mail_templates.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -14,7 +15,7 @@
 #include <unistd.h>
 #endif
 
-#define STORE_SCHEMA_VERSION 6
+#define STORE_SCHEMA_VERSION 7
 
 static void set_error(char *err, size_t errlen, const char *message)
 {
@@ -141,6 +142,21 @@ static int validate_schema(Store *store, int version, char *err, size_t errlen)
         for(size_t j=0;j<sizeof checks/sizeof checks[0];j++) {sqlite3_stmt *q=NULL;
             if(sqlite3_prepare_v2(store->db,checks[j],-1,&q,NULL)!=SQLITE_OK)return db_error(store,err,errlen);
             int ok=sqlite3_step(q)==SQLITE_DONE;sqlite3_finalize(q);if(!ok)return db_error(store,err,errlen);
+        }
+    }
+    if (version >= 7) {
+        const char *checks[] = {
+            "SELECT id,self_name,self_email,updated_at FROM mail_template_settings LIMIT 0",
+            "SELECT alert,audience,subject,body,copy_enabled,updated_at FROM mail_templates LIMIT 0",
+            "SELECT template_alert,template_audience,template_copy FROM outbox LIMIT 0"
+        };
+        for (size_t j = 0; j < sizeof checks / sizeof checks[0]; j++) {
+            sqlite3_stmt *stmt = NULL;
+            if (sqlite3_prepare_v2(store->db, checks[j], -1, &stmt, NULL) != SQLITE_OK)
+                return db_error(store, err, errlen);
+            int ok = sqlite3_step(stmt) == SQLITE_DONE;
+            sqlite3_finalize(stmt);
+            if (!ok) return db_error(store, err, errlen);
         }
     }
     return 1;
@@ -384,6 +400,12 @@ int store_open(Store *store, const char *path, char *err, size_t errlen)
                  store_exec(store, incident_schema(), err, errlen) &&
                  store_exec(store, "PRAGMA user_version=6", err, errlen);
             version = 6;
+        }
+        if (ok && version == 6) {
+            ok = validate_schema(store, 6, err, errlen) &&
+                 store_exec(store, mail_templates_schema(), err, errlen) &&
+                 store_exec(store, "PRAGMA user_version=7", err, errlen);
+            version = 7;
         }
         if (ok) ok = version == STORE_SCHEMA_VERSION &&
                      validate_schema(store, STORE_SCHEMA_VERSION, err, errlen) &&

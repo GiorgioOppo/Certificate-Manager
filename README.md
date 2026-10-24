@@ -19,6 +19,7 @@ A local HTTPS certificate registry written in C, with a multilingual web interfa
 - Inspect live certificates and monitor up to 100 endpoints. Claim anomalies, plan maintenance windows, confirm transient reachability failures and investigate unexpected certificate changes.
 - Compare renewals, review each technical recipient’s SMTP delivery state, and use a server-backed deployment checklist before closing a case. Download the captured closure evidence and workflow history.
 - Configure SMTP in the interface, test TLS and authentication without sending messages, inspect `.eml` previews, and pause or enable delivery.
+- Customize the subject and plain-text body of each alert for yourself, business contacts, technical contacts and other configured recipients; preview drafts and enable additional audience copies explicitly.
 - Use ten web pages in **English, Italian, French, Spanish, Simplified Chinese or Japanese**.
 
 This is a local application. The HTTP server binds to **127.0.0.1** by default; Docker Compose publishes it only on the host’s loopback address. It has no user authentication or access roles. Publishing the source on GitHub does not make it a hosted service. See [Security](SECURITY.md) before considering network exposure.
@@ -155,13 +156,13 @@ Keep this archive private. When restoring it, preserve ownership `10001:10001` a
 | Import certificates | `/importa` | Preview certificate files or check and import a CSV endpoint inventory. |
 | Verify endpoint | `/verifica` | Retrieve and compare the certificate presented by a service. |
 | Reminders | `/promemoria` | Expiry reminders and optional desktop notifications. |
-| Email queue | `/email` | SMTP settings, delivery state and `.eml` downloads. |
+| Email queue | `/email` | SMTP settings, per-alert/audience templates, delivery state and `.eml` downloads. |
 | Workflow | `/workflow` | Component diagrams and explanations of acquisition, checks, renewal and delivery. |
 | Directory | `/rubrica` | Reusable people, groups and shared contact assignments. |
 
 Each page supports direct navigation, reload and browser history. Registry rows become readable cards on narrow screens. The Workflow page explains how the components communicate, with diagrams available locally in every interface language.
 
-Select a language in the interface: English (`en`), Italiano (`it`), Français (`fr`), Español (`es`), 简体中文 (`zh-CN`) or 日本語 (`ja`). Dates and times follow the selected language. Language changes preserve registry filters; save or cancel form drafts first. Translations apply to interface text; certificate subjects, contact names and other user data retain their original content. The command-line interface and generated email message content remain in Italian.
+Select a language in the interface: English (`en`), Italiano (`it`), Français (`fr`), Español (`es`), 简体中文 (`zh-CN`) or 日本語 (`ja`). Dates and times follow the selected language. Language changes preserve registry filters; save or cancel form drafts first. Translations apply to interface text; certificate subjects, contact names and other user data retain their original content. The command-line interface and default email content remain in Italian. Saved email templates can use your preferred language, independently of the interface language.
 
 ## Guided imports and CSV inventory
 
@@ -244,6 +245,14 @@ Environment configuration is available when no SMTP profile has been saved in th
 
 The queue runs every 60 seconds while the server is active, from the process-queue button, or through `check` and `watch`. Failed deliveries use increasing delays, up to five automatic attempts. “Sent” means the SMTP server accepted the message, not that it reached the inbox. An interruption after SMTP acceptance can result in a duplicate.
 
+### Email templates by alert and audience
+
+In **Email queue**, configure **My notification address**, then edit a template by selecting its alert and audience. Separate templates cover expiry at 45, 30, 15 and 2 days, expiry itself, custom reminder thresholds, escalation, signed-certificate delivery, each monitoring error and service recovery. Audiences are **Myself**, **Business contacts**, **Technical contacts** and **Other configured recipients**. The latter covers an explicit monitor or escalation address that does not match the certificate's contacts or your notification address.
+
+Edit the subject and plain-text body using the listed `{{variables}}`, such as `{{common_name}}`, `{{not_after}}`, `{{recipient_name}}` and `{{service_url}}`. Preview uses a selected certificate/event or clearly identified sample data, without saving or sending anything. Saving changes only future messages; queued and historical messages retain their original rendered content. Reset restores the selected default without modifying queued mail. Signed-certificate delivery always retains its public PEM attachment; a template cannot add private keys or arbitrary attachments.
+
+Existing recipient routes remain active: expiry goes to business contacts, certificate delivery to technical contacts, and escalation/monitor alerts to their explicit configured lists. **Additional copies** are opt-in separately for each alert and audience; all start disabled. The **Myself** copy requires a saved notification email. Addresses are deduplicated case-insensitively, including people present in multiple audiences. Additional-copy eligibility is checked again before delivery, so disabling the copy or removing its assignment prevents an unsent copy from being delivered. Copies also respect active reminder rules, certificate validity for distribution, monitor email settings and maintenance windows. Templates do not enable SMTP. See the [Italian template guide](docs/EMAIL-TEMPLATES.it.md) for variables, examples and routing details.
+
 ## Command line
 
 ```sh
@@ -260,7 +269,7 @@ Place `--db PATH` before the command. `watch` checks expiry, delivery and config
 
 ## Data and backups
 
-The database contains public certificates, metadata, contact details, reminders, monitor history, the email queue and SMTP settings. It never stores TLS private keys. Uploads reject private keys, PKCS#12/PFX files and unrelated data; the per-file limit is 16 MiB. Duplicates are identified by SHA-256 fingerprint. Existing databases are migrated automatically to schema version **6**, retaining earlier renewal/directory/policy data and adding persistent inventory batches, row receipts, policy templates, incident options/claims, closure evidence and workflow audit records. New audit records start with this migration; older actions are not reconstructed. Previously archived renewal history remains archived and is recorded as manual/historical retirement rather than claiming verified installation.
+The database contains public certificates, metadata, contact details, reminders, monitor history, the email queue, SMTP settings and email templates. It never stores TLS private keys. Uploads reject private keys, PKCS#12/PFX files and unrelated data; the per-file limit is 16 MiB. Duplicates are identified by SHA-256 fingerprint. Existing databases are migrated automatically to schema version **7**, retaining earlier renewal/directory/policy data, persistent inventory batches, row receipts, policy templates, incident options/claims, closure evidence and workflow audit records. Version 7 adds the notification identity, per-alert/audience email templates and queued-message audience metadata; it preserves previously prepared messages and starts additional copies disabled. Workflow audit records cover operations since the version 6 migration; older actions are not reconstructed. Previously archived renewal history remains archived and is recorded as manual/historical retirement rather than claiming verified installation.
 
 Stop every application process using a database before copying it. Back up its `.smtp.key` sidecar if present, keep both files private, and make a backup before upgrading. Do not commit databases, SMTP keys, environment files or real service credentials. The repository ignores these artifacts; tests create temporary certificates and databases instead of using production material.
 
@@ -270,7 +279,7 @@ Stop every application process using a database before copying it. Back up its `
 make test
 ```
 
-The suite covers certificate parsing, chain reconstruction, reminders, directory/group propagation, custom reminder and escalation policies, overlapping renewals, fresh endpoint verification, monitor email alerts, queue behavior, encrypted SMTP settings, migrations, HTTP/CSRF checks, the ten web pages, endpoint verification and background monitoring. Network tests use local TLS/SMTP peers and temporary certificates; they do not require a real SMTP account or contact public HTTPS sites. Additional suites cover CSV mapping/validation, atomic rollback and review conflicts, durable batches, reminder simulation/templates, the shared closing checklist, immutable closure snapshots, incident claims, maintenance and failure thresholds. Node.js is used for interface checks.
+The suite covers certificate parsing, chain reconstruction, reminders, directory/group propagation, custom reminder and escalation policies, overlapping renewals, fresh endpoint verification, monitor email alerts, queue behavior, encrypted SMTP settings, migrations, HTTP/CSRF checks, the ten web pages, endpoint verification and background monitoring. Network tests use local TLS/SMTP peers and temporary certificates; they do not require a real SMTP account or contact public HTTPS sites. Additional suites cover CSV mapping/validation, atomic rollback and review conflicts, durable batches, reminder simulation/templates, the shared closing checklist, immutable closure snapshots, incident claims, maintenance and failure thresholds. Email-template integration tests cover persistence, read-only previews, input/header validation, per-audience routing, opt-in copies, deduplication, queue snapshots and public certificate attachments. Node.js is used for interface checks.
 
 The [GitHub Actions workflow](.github/workflows/ci.yml) builds and tests on Ubuntu on each push and pull request. It uses the official [checkout](https://github.com/actions/checkout) and [setup-node](https://github.com/actions/setup-node) actions. See [Contributing](CONTRIBUTING.md) for source layout and [Publishing to GitHub](docs/PUBLISHING.md) for publication steps.
 

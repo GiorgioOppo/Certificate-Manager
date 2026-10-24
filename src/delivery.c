@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "delivery.h"
+#include "mail_templates.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -8,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 
 #include <curl/curl.h>
@@ -21,7 +23,7 @@
 
 /* Recheck recipients/configuration when claiming, not only when preparing a
  * message. A disabled alert or removed contact must never cause a later send. */
-#define DELIVERY_ELIGIBLE_SQL(clock_parameter) \
+#define BASE_DELIVERY_ELIGIBLE_SQL(clock_parameter) \
     "EXISTS(SELECT 1 FROM certificates certificate WHERE certificate.id=outbox.certificate_id " \
     "AND certificate.archived=0 AND (" \
     "(outbox.kind='expiry' AND NOT EXISTS(SELECT 1 FROM reminder_policies policy " \
@@ -42,6 +44,32 @@
     "WHERE event.id=outbox.event_id AND monitor.email_alerts=1 " \
     "AND recipient.email=outbox.recipient_email COLLATE NOCASE))))"
 
+/* Opt-in copies keep the alert's original policy/validity requirements while
+ * checking the current destination membership again at claim time. */
+#define COPY_DELIVERY_ELIGIBLE_SQL(clock_parameter) \
+    "EXISTS(SELECT 1 FROM certificates certificate WHERE certificate.id=outbox.certificate_id " \
+    "AND certificate.archived=0 AND EXISTS(SELECT 1 FROM mail_templates template " \
+    "WHERE template.alert=outbox.template_alert AND template.audience=outbox.template_audience " \
+    "AND template.copy_enabled=1) AND ((outbox.template_audience='self' " \
+    "AND EXISTS(SELECT 1 FROM mail_template_settings settings WHERE settings.id=1 " \
+    "AND settings.self_email<>'' AND settings.self_email=outbox.recipient_email COLLATE NOCASE)) " \
+    "OR (outbox.template_audience IN('business','technical') AND EXISTS(SELECT 1 FROM contacts contact " \
+    "WHERE contact.certificate_id=certificate.id AND contact.role=outbox.template_audience " \
+    "AND contact.email=outbox.recipient_email COLLATE NOCASE))) AND (" \
+    "(outbox.kind='expiry' AND NOT EXISTS(SELECT 1 FROM reminder_policies policy " \
+    "WHERE policy.certificate_id=certificate.id AND policy.enabled=0)) OR " \
+    "(outbox.kind='certificate' AND certificate.not_before<=" clock_parameter " AND certificate.not_after>" clock_parameter \
+    ") OR (outbox.kind='escalation' AND EXISTS(SELECT 1 FROM reminder_policies policy " \
+    "WHERE policy.certificate_id=certificate.id AND policy.enabled=1 AND policy.escalation_email<>'' " \
+    "AND EXISTS(SELECT 1 FROM notifications notification WHERE notification.certificate_id=certificate.id " \
+    "AND notification.sent_at<=" clock_parameter "-policy.escalation_after_days*86400))) OR " \
+    "(outbox.kind='monitor' AND EXISTS(SELECT 1 FROM monitor_events event JOIN monitors monitor " \
+    "ON monitor.id=event.monitor_id WHERE event.id=outbox.event_id AND monitor.certificate_id=certificate.id " \
+    "AND monitor.email_alerts=1 AND monitor.enabled=1))))"
+#define DELIVERY_ELIGIBLE_SQL(clock_parameter) \
+    "((outbox.template_copy=0 AND " BASE_DELIVERY_ELIGIBLE_SQL(clock_parameter) ") OR " \
+    "(outbox.template_copy=1 AND " COPY_DELIVERY_ELIGIBLE_SQL(clock_parameter) "))"
+
 /* A temporary maintenance pause must not make cleanup_queue delete the mail.
  * Recheck in both claim SELECT and CAS after a fresh post-maintenance probe. */
 #define MONITOR_DELIVERY_READY_SQL(clock_parameter) \
@@ -51,7 +79,7 @@
     " AND options.maintenance_end>" clock_parameter \
     ") OR options.post_maintenance_check=1)))"
 
-typedef struct { char *name, *email; } Recipient;
+typedef struct { char *name, *email; char audience[16]; int copy; } Recipient;
 
 static int error_message(char *err, size_t n, const char *format, ...)
 {
@@ -180,6 +208,8 @@ static int recipients_load(Store *store, int64_t cert_id, const char *role,
         }
         *recipients = next;
         next[*count].name = name; next[*count].email = email;
+        snprintf(next[*count].audience, sizeof next[*count].audience, "%s", role);
+        next[*count].copy = 0;
         ++*count;
     }
     if (result != SQLITE_DONE) goto fail_db;
@@ -253,19 +283,6 @@ static int utc_text(int64_t epoch, char *buffer, size_t size, int header)
     return strftime(buffer, size, "%d/%m/%Y alle %H:%M UTC", &tm) > 0;
 }
 
-static char *formatted(const char *format, ...)
-{
-    va_list args, copy;
-    va_start(args, format);
-    va_copy(copy, args);
-    int count = vsnprintf(NULL, 0, format, copy);
-    va_end(copy);
-    char *text = count >= 0 ? malloc((size_t)count + 1) : NULL;
-    if (text) (void)vsnprintf(text, (size_t)count + 1, format, args);
-    va_end(args);
-    return text;
-}
-
 int reminder_policy_due(Store *store, int64_t cert_id, int64_t not_after,
                          int64_t now, int *threshold, char *err, size_t n)
 {
@@ -316,49 +333,129 @@ int reminder_policy_due(Store *store, int64_t cert_id, int64_t not_after,
     return 1;
 }
 
+/* Base recipients are loaded first. Optional copies are deduplicated by
+ * mailbox, so base routing always determines the template for shared roles.
+ * Among copies the personal profile takes precedence, then business/technical. */
+static int append_copies(Store *store, int64_t cert_id, const char *alert,
+                         Recipient **recipients, size_t *count, char *err, size_t n)
+{
+    sqlite3_stmt *stmt = NULL;
+    const char *sql = "SELECT audience,name,email FROM (SELECT template.audience AS audience,contact.name AS name,contact.email AS email FROM mail_templates template "
+        "JOIN contacts contact ON contact.role=template.audience AND contact.certificate_id=?1 "
+        "WHERE template.alert=?2 AND template.copy_enabled=1 AND template.audience IN('business','technical') "
+        "UNION ALL SELECT 'self',settings.self_name,settings.self_email FROM mail_template_settings settings "
+        "JOIN mail_templates template ON template.alert=?2 AND template.audience='self' AND template.copy_enabled=1 "
+        "WHERE settings.id=1 AND settings.self_email<>'') ORDER BY CASE audience WHEN 'self' THEN 0 WHEN 'business' THEN 1 ELSE 2 END,email";
+    if (sqlite3_prepare_v2(store->db, sql, -1, &stmt, NULL) != SQLITE_OK) return db_error(store, err, n);
+    sqlite3_bind_int64(stmt, 1, cert_id); bind_text(stmt, 2, alert);
+    int result;
+    while ((result = sqlite3_step(stmt)) == SQLITE_ROW) {
+        const char *audience = (const char *)sqlite3_column_text(stmt, 0);
+        const char *name = (const char *)sqlite3_column_text(stmt, 1);
+        const char *email = (const char *)sqlite3_column_text(stmt, 2);
+        int duplicate = 0;
+        for (size_t i = 0; i < *count; ++i) if (!strcasecmp((*recipients)[i].email, email)) { duplicate = 1; break; }
+        if (duplicate) continue;
+        if (!valid_email(email) || !valid_header(name) || strlen(name) > 512) {
+            sqlite3_finalize(stmt); return error_message(err, n, "Destinatario della copia non valido.");
+        }
+        Recipient *next = realloc(*recipients, (*count + 1) * sizeof **recipients);
+        if (!next) { sqlite3_finalize(stmt); return error_message(err, n, "Memoria insufficiente."); }
+        *recipients = next;
+        Recipient *recipient = &next[*count];
+        memset(recipient, 0, sizeof *recipient);
+        recipient->name = strdup(name); recipient->email = strdup(email);
+        if (!recipient->name || !recipient->email) {
+            free(recipient->name); free(recipient->email); sqlite3_finalize(stmt);
+            return error_message(err, n, "Memoria insufficiente.");
+        }
+        snprintf(recipient->audience, sizeof recipient->audience, "%s", audience);
+        recipient->copy = 1; ++*count;
+    }
+    sqlite3_finalize(stmt);
+    return result == SQLITE_DONE ? 1 : db_error(store, err, n);
+}
+
 static int queue_rows(Store *store, int64_t cert_id, const char *kind,
                       int threshold, Recipient *recipients, size_t count,
-                      const char *subject, const char *body, const char *attachment,
+                      const char *alert, const char *attachment, int64_t event_id,
                       int64_t now, int *queued, char *err, size_t n)
 {
-    sqlite3_stmt *insert = NULL, *prune = NULL;
+    sqlite3_stmt *insert = NULL, *prune = NULL, *skip = NULL;
+    int outer = sqlite3_get_autocommit(store->db), added = 0;
+    *queued = 0;
+    if (!store_exec(store, "SAVEPOINT mail_template_queue", err, n)) return 0;
     const char *sql = "INSERT INTO outbox(certificate_id,kind,recipient_name,recipient_email,"
-        "threshold,subject,body,attachment_pem,status,attempts,last_error,created_at,next_attempt) "
-        "SELECT ?1,?2,?3,?4,?5,?6,?7,?8,'pending',0,'',?9,0 "
+        "threshold,subject,body,attachment_pem,status,attempts,last_error,created_at,next_attempt,"
+        "event_id,template_alert,template_audience,template_copy) "
+        "SELECT ?1,?2,?3,?4,?5,?6,?7,?8,'pending',0,'',?9,0,nullif(?10,0),?11,?12,?13 "
         "WHERE (?2<>'expiry' OR NOT EXISTS(SELECT 1 FROM outbox older WHERE "
         "older.certificate_id=?1 AND older.kind='expiry' AND older.recipient_email=?4 COLLATE NOCASE AND older.threshold<?5)) "
         "AND NOT EXISTS(SELECT 1 FROM outbox prior WHERE prior.certificate_id=?1 AND prior.kind=?2 "
-        "AND prior.recipient_email=?4 COLLATE NOCASE AND prior.threshold=?5) "
+        "AND prior.recipient_email=?4 COLLATE NOCASE AND ((?2='monitor' AND prior.event_id=?10) OR (?2<>'monitor' AND prior.threshold=?5))) "
         "ON CONFLICT DO NOTHING";
     if (sqlite3_prepare_v2(store->db, sql, -1, &insert, NULL) != SQLITE_OK) goto fail;
+    /* Decide whether this mailbox already has this exact notification, or
+     * a more urgent reminder, before loading or expanding the current template.
+     * Existing snapshots must remain usable after later template edits. */
+    if (sqlite3_prepare_v2(store->db,
+        "SELECT (?2='expiry' AND EXISTS(SELECT 1 FROM outbox older WHERE "
+        "older.certificate_id=?1 AND older.kind='expiry' AND older.recipient_email=?3 COLLATE NOCASE AND older.threshold<?4)) "
+        "OR EXISTS(SELECT 1 FROM outbox prior WHERE prior.certificate_id=?1 AND prior.kind=?2 "
+        "AND prior.recipient_email=?3 COLLATE NOCASE AND ((?2='monitor' AND prior.event_id=?5) OR (?2<>'monitor' AND prior.threshold=?4)))",
+        -1, &skip, NULL) != SQLITE_OK) goto fail;
     if (!strcmp(kind, "expiry") && sqlite3_prepare_v2(store->db,
         "DELETE FROM outbox WHERE certificate_id=? AND kind='expiry' AND recipient_email=? COLLATE NOCASE "
         "AND threshold>? AND status IN('pending','failed')", -1, &prune, NULL) != SQLITE_OK) goto fail;
-    *queued = 0;
     for (size_t i = 0; i < count; ++i) {
+        sqlite3_reset(skip); sqlite3_clear_bindings(skip);
+        if (sqlite3_bind_int64(skip, 1, cert_id) != SQLITE_OK ||
+            !bind_text(skip, 2, kind) || !bind_text(skip, 3, recipients[i].email) ||
+            sqlite3_bind_int(skip, 4, threshold) != SQLITE_OK ||
+            sqlite3_bind_int64(skip, 5, event_id) != SQLITE_OK || sqlite3_step(skip) != SQLITE_ROW) goto fail;
+        int existing = sqlite3_column_int(skip, 0);
+        sqlite3_reset(skip);
+        if (existing) continue;
+        char *subject = NULL, *body = NULL;
+        if (!mail_templates_render(store, alert, recipients[i].audience, cert_id, event_id,
+            threshold, now, recipients[i].name, recipients[i].email, NULL, NULL,
+            &subject, &body, err, n)) {
+            char detail[512];
+            snprintf(detail, sizeof detail, "%s", err && n && *err ? err : "Generazione email non riuscita.");
+            error_message(err, n, "Template %s/%s, certificato #%" PRId64 ": %s",
+                alert, recipients[i].audience, cert_id, detail);
+            goto rollback;
+        }
+        int ok = 1;
         if (prune) {
             sqlite3_reset(prune); sqlite3_clear_bindings(prune);
-            if (sqlite3_bind_int64(prune, 1, cert_id) != SQLITE_OK ||
-                !bind_text(prune, 2, recipients[i].email) ||
-                sqlite3_bind_int(prune, 3, threshold) != SQLITE_OK ||
-                sqlite3_step(prune) != SQLITE_DONE) goto fail;
+            ok = sqlite3_bind_int64(prune, 1, cert_id) == SQLITE_OK &&
+                bind_text(prune, 2, recipients[i].email) &&
+                sqlite3_bind_int(prune, 3, threshold) == SQLITE_OK &&
+                sqlite3_step(prune) == SQLITE_DONE;
         }
         sqlite3_reset(insert); sqlite3_clear_bindings(insert);
-        if (sqlite3_bind_int64(insert, 1, cert_id) != SQLITE_OK ||
-            !bind_text(insert, 2, kind) || !bind_text(insert, 3, recipients[i].name) ||
-            !bind_text(insert, 4, recipients[i].email) ||
-            sqlite3_bind_int(insert, 5, threshold) != SQLITE_OK ||
-            !bind_text(insert, 6, subject) || !bind_text(insert, 7, body) ||
-            !bind_text(insert, 8, attachment) ||
-            sqlite3_bind_int64(insert, 9, now) != SQLITE_OK ||
-            sqlite3_step(insert) != SQLITE_DONE) goto fail;
-        *queued += sqlite3_changes(store->db);
+        ok = ok && sqlite3_bind_int64(insert, 1, cert_id) == SQLITE_OK &&
+            bind_text(insert, 2, kind) && bind_text(insert, 3, recipients[i].name) &&
+            bind_text(insert, 4, recipients[i].email) &&
+            sqlite3_bind_int(insert, 5, threshold) == SQLITE_OK &&
+            bind_text(insert, 6, subject) && bind_text(insert, 7, body) &&
+            bind_text(insert, 8, attachment) && sqlite3_bind_int64(insert, 9, now) == SQLITE_OK &&
+            sqlite3_bind_int64(insert, 10, event_id) == SQLITE_OK && bind_text(insert, 11, alert) &&
+            bind_text(insert, 12, recipients[i].audience) && sqlite3_bind_int(insert, 13, recipients[i].copy) == SQLITE_OK &&
+            sqlite3_step(insert) == SQLITE_DONE;
+        free(subject); free(body);
+        if (!ok) goto fail;
+        added += sqlite3_changes(store->db);
     }
-    sqlite3_finalize(insert); sqlite3_finalize(prune);
-    return 1;
+    sqlite3_finalize(insert); sqlite3_finalize(prune); sqlite3_finalize(skip); insert = NULL; prune = NULL; skip = NULL;
+    if (!store_exec(store, "RELEASE mail_template_queue", err, n)) goto rollback;
+    *queued = added; return 1;
 fail:
     db_error(store, err, n);
-    sqlite3_finalize(insert); sqlite3_finalize(prune);
+rollback:
+    sqlite3_finalize(insert); sqlite3_finalize(prune); sqlite3_finalize(skip);
+    sqlite3_exec(store->db, outer ? "ROLLBACK" : "ROLLBACK TO mail_template_queue; RELEASE mail_template_queue", NULL, NULL, NULL);
     return 0;
 }
 
@@ -368,25 +465,12 @@ int delivery_queue_expiry(Store *store, int64_t cert_id, int threshold,
     if (!valid_store(store, err, n)) return 0;
     if (threshold < 0 || threshold > 3650)
         return error_message(err, n, "Soglia del promemoria email non valida.");
-    char *name = NULL;
-    int64_t expiry;
-    char date[64];
-    if (!certificate_metadata(store, cert_id, &name, &expiry, err, n)) return 0;
-    if (!utc_text(expiry, date, sizeof date, 0)) { free(name); return error_message(err, n, "Data di scadenza non rappresentabile."); }
-    Recipient *recipients = NULL;
-    size_t count = 0;
-    if (!recipients_load(store, cert_id, "business", &recipients, &count, err, n)) { free(name); return 0; }
-    char *subject = formatted(threshold ? "Scadenza certificato HTTPS %s: soglia %d giorni" :
-                                        "Certificato HTTPS scaduto: %s", name, threshold);
-    char *body = formatted("Gentile referente,\n\nil certificato HTTPS %s %s il %s.\n"
-        "Soglia rilevata: %d giorni prima della scadenza (0 indica un certificato scaduto).\n"
-        "Si richiede di pianificare o verificare il rinnovo con il referente tecnico.\n\n"
-        "Gestione certificati HTTPS\n", name, threshold ? "scade" : "è scaduto", date, threshold);
-    int queued = 0;
-    int ok = subject && body ? queue_rows(store, cert_id, "expiry", threshold, recipients,
-        count, subject, body, "", now, &queued, err, n) : error_message(err, n, "Memoria insufficiente.");
-    free(subject); free(body); free(name); recipients_free(recipients, count);
-    return ok;
+    Recipient *recipients = NULL; size_t count = 0; int queued = 0;
+    const char *alert = mail_templates_expiry_alert(threshold);
+    int ok = recipients_load(store, cert_id, "business", &recipients, &count, err, n) &&
+        append_copies(store, cert_id, alert, &recipients, &count, err, n) &&
+        queue_rows(store, cert_id, "expiry", threshold, recipients, count, alert, "", 0, now, &queued, err, n);
+    recipients_free(recipients, count); return ok;
 }
 
 int reminder_policy_check_escalation(Store *store, int64_t cert_id,
@@ -411,32 +495,23 @@ int reminder_policy_check_escalation(Store *store, int64_t cert_id,
     int result = sqlite3_step(stmt);
     if (result == SQLITE_DONE) { sqlite3_finalize(stmt); return 1; }
     if (result != SQLITE_ROW) { sqlite3_finalize(stmt); return db_error(store, err, n); }
-    Recipient recipient = {column_text(stmt, 0), column_text(stmt, 1)};
+    Recipient recipient = {.name=column_text(stmt, 0), .email=column_text(stmt, 1)};
     int finalized = sqlite3_finalize(stmt);
     if (finalized != SQLITE_OK || !recipient.name || !recipient.email ||
         strlen(recipient.name) > 512 || !valid_header(recipient.name) || !valid_email(recipient.email)) {
         free(recipient.name); free(recipient.email);
         return error_message(err, n, "Destinatario dell'escalation non valido.");
     }
-    char *name = NULL;
-    int64_t expiry;
-    char date[64];
-    if (!certificate_metadata(store, cert_id, &name, &expiry, err, n) ||
-        !utc_text(expiry, date, sizeof date, 0)) {
-        free(name); free(recipient.name); free(recipient.email);
-        return error_message(err, n, "Impossibile leggere il certificato per l'escalation.");
-    }
-    char *subject = formatted("Escalation rinnovo certificato HTTPS %s", name);
-    char *body = formatted("Gentile referente,\n\nil certificato HTTPS %s scade il %s.\n"
-        "E trascorso il periodo di escalation dal primo promemoria registrato.\n"
-        "Il certificato e ancora nel registro attivo: verificare il rinnovo e l'installazione "
-        "su tutti i servizi interessati.\n\nGestione certificati HTTPS\n", name, date);
-    int added = 0;
-    int ok = subject && body ? queue_rows(store, cert_id, "escalation", -1, &recipient,
-        1, subject, body, "", now, &added, err, n) : error_message(err, n, "Memoria insufficiente.");
+    Recipient *recipients = malloc(sizeof *recipients);
+    if (!recipients) { free(recipient.name); free(recipient.email); return error_message(err, n, "Memoria insufficiente."); }
+    *recipients = recipient; size_t count = 1;
+    char *audience = mail_templates_audience(store, cert_id, recipient.email, err, n);
+    int added = 0, ok = audience != NULL;
+    if (audience) { snprintf(recipients[0].audience, sizeof recipients[0].audience, "%s", audience); free(audience); }
+    if (ok) ok = append_copies(store, cert_id, "escalation", &recipients, &count, err, n) &&
+        queue_rows(store, cert_id, "escalation", -1, recipients, count, "escalation", "", 0, now, &added, err, n);
     if (ok && queued) *queued = added;
-    free(subject); free(body); free(name); free(recipient.name); free(recipient.email);
-    return ok;
+    recipients_free(recipients, count); return ok;
 }
 
 int delivery_queue_monitor_event(Store *store, int64_t event_id, int64_t now,
@@ -448,7 +523,6 @@ int delivery_queue_monitor_event(Store *store, int64_t event_id, int64_t now,
         return error_message(err, n, "Evento del monitor non valido.");
     sqlite3_stmt *stmt = NULL;
     char *target = NULL, *kind = NULL, *detail = NULL, *expected = NULL, *observed = NULL;
-    char *subject = NULL, *body = NULL;
     Recipient *recipients = NULL;
     size_t count = 0;
     int64_t cert_id = 0, monitor_id = 0;
@@ -479,32 +553,17 @@ int delivery_queue_monitor_event(Store *store, int64_t event_id, int64_t now,
         }
         Recipient *next = realloc(recipients, (count + 1) * sizeof *recipients);
         if (!next) { free(name); free(email); error_message(err, n, "Memoria insufficiente."); goto done; }
-        recipients = next; recipients[count++] = (Recipient){name, email};
+        recipients = next; recipients[count] = (Recipient){.name=name, .email=email};
+        char *audience = mail_templates_audience(store, cert_id, email, err, n);
+        if (!audience) { ++count; goto done; }
+        snprintf(recipients[count].audience, sizeof recipients[count].audience, "%s", audience);
+        free(audience); ++count;
     }
     if (result != SQLITE_DONE) goto fail_db;
     if (sqlite3_finalize(stmt) != SQLITE_OK) { stmt = NULL; goto fail_db; }
     stmt = NULL;
-    subject = formatted("Monitor HTTPS %s: %s", target, !strcmp(kind, "recovered") ? "servizio ripristinato" : "anomalia rilevata");
-    body = formatted("Monitor del servizio HTTPS %s\n\n%s\n\n"
-        "Impronta prevista: %s\nImpronta osservata: %s\n\n"
-        "Controllare il servizio e il registro dei certificati. Un certificato inatteso "
-        "non viene approvato automaticamente.\n\nGestione certificati HTTPS\n", target,
-        detail, expected, observed[0] ? observed : "non disponibile");
-    if (!subject || !body) { error_message(err, n, "Memoria insufficiente."); goto done; }
-    if (sqlite3_prepare_v2(store->db,
-        "INSERT INTO outbox(certificate_id,kind,recipient_name,recipient_email,threshold,subject,body,"
-        "attachment_pem,status,attempts,last_error,created_at,next_attempt,event_id) "
-        "SELECT ?1,'monitor',?2,?3,-1,?4,?5,'','pending',0,'',?6,0,?7 "
-        "WHERE NOT EXISTS(SELECT 1 FROM outbox WHERE kind='monitor' AND event_id=?7 "
-        "AND recipient_email=?3 COLLATE NOCASE) ON CONFLICT DO NOTHING", -1, &stmt, NULL) != SQLITE_OK) goto fail_db;
-    for (size_t i = 0; i < count; ++i) {
-        sqlite3_reset(stmt); sqlite3_clear_bindings(stmt);
-        if (sqlite3_bind_int64(stmt, 1, cert_id) != SQLITE_OK || !bind_text(stmt, 2, recipients[i].name) ||
-            !bind_text(stmt, 3, recipients[i].email) || !bind_text(stmt, 4, subject) ||
-            !bind_text(stmt, 5, body) || sqlite3_bind_int64(stmt, 6, now) != SQLITE_OK ||
-            sqlite3_bind_int64(stmt, 7, event_id) != SQLITE_OK || sqlite3_step(stmt) != SQLITE_DONE) goto fail_db;
-        added += sqlite3_changes(store->db);
-    }
+    if (!append_copies(store, cert_id, kind, &recipients, &count, err, n) ||
+        !queue_rows(store, cert_id, "monitor", -1, recipients, count, kind, "", event_id, now, &added, err, n)) goto done;
     if (queued) *queued = added;
     ok = 1;
     goto done;
@@ -512,7 +571,7 @@ fail_db:
     db_error(store, err, n);
 done:
     sqlite3_finalize(stmt); free(target); free(kind); free(detail); free(expected); free(observed);
-    free(subject); free(body); recipients_free(recipients, count);
+    recipients_free(recipients, count);
     return ok;
 }
 
@@ -558,18 +617,11 @@ int delivery_queue_certificate(Store *store, int64_t cert_id, const char *pem_bu
     size_t count = 0;
     if (!recipients_load(store, cert_id, "technical", &recipients, &count, err, n)) { free(name); return 0; }
     if (!count) { free(name); recipients_free(recipients, count); return error_message(err, n, "Aggiungi almeno un referente tecnico prima di preparare l'invio del certificato."); }
-    char *subject = formatted("Certificato HTTPS firmato per %s - validità fino al %s", name, date);
-    char *body = formatted("Gentile referente tecnico,\n\nin allegato è disponibile il certificato HTTPS "
-        "firmato per %s, con scadenza il %s.\n"
-        "Installare il certificato e verificare il servizio secondo le procedure previste.\n"
-        "L'allegato contiene esclusivamente certificati pubblici e non include chiavi private.\n\n"
-        "Gestione certificati HTTPS\n", name, date);
     int added = 0;
-    int ok = subject && body ? queue_rows(store, cert_id, "certificate", -1, recipients,
-        count, subject, body, pem_bundle, now, &added, err, n) : error_message(err, n, "Memoria insufficiente.");
+    int ok = append_copies(store, cert_id, "certificate", &recipients, &count, err, n) &&
+        queue_rows(store, cert_id, "certificate", -1, recipients, count, "certificate", pem_bundle, 0, now, &added, err, n);
     if (ok && queued) *queued = added;
-    free(subject); free(body); free(name); recipients_free(recipients, count);
-    return ok;
+    free(name); recipients_free(recipients, count); return ok;
 }
 
 static void base64(FILE *out, const unsigned char *text, size_t length, int wrap)

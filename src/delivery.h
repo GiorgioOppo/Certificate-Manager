@@ -4,7 +4,9 @@
 #include "store.h"
 #include "smtp_settings.h"
 
-/* Queue functions participate in the caller's transaction. */
+/* Queue functions participate in the caller's transaction. Subject/body are
+ * rendered once from the alert/audience template and stored as snapshots.
+ * Baseline recipients stay enabled; additional template copies are opt-in. */
 int delivery_queue_expiry(Store *store, int64_t certificate_id, int threshold,
                           int64_t now, char *err, size_t n);
 int delivery_queue_certificate(Store *store, int64_t certificate_id,

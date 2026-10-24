@@ -10,6 +10,7 @@
 #include "inventory.h"
 #include "operations.h"
 #include "incident.h"
+#include "mail_templates.h"
 #include "workflow_support.h"
 #include "assets.h"
 #include <arpa/inet.h>
@@ -578,7 +579,7 @@ static void update_contacts(int fd, Store *store, int64_t id, const Request *r) 
             sqlite3_stmt *prune = NULL;
             if (ok) {
                 ok = sqlite3_prepare_v2(store->db, "DELETE FROM outbox WHERE certificate_id=?1 "
-                       "AND kind IN('expiry','certificate') AND status IN('pending','failed') AND NOT EXISTS (SELECT 1 FROM contacts c "
+                       "AND kind IN('expiry','certificate') AND template_copy=0 AND status IN('pending','failed') AND NOT EXISTS (SELECT 1 FROM contacts c "
                        "WHERE c.certificate_id=outbox.certificate_id AND c.email=outbox.recipient_email COLLATE NOCASE "
                        "AND c.role=CASE outbox.kind WHEN 'expiry' THEN 'business' ELSE 'technical' END)",
                        -1, &prune, NULL) == SQLITE_OK &&
@@ -748,12 +749,13 @@ static int serve_ui_page(int fd, const char *target) {
 }
 
 static void route(int fd, Store *store, const Request *r, const char *token) {
-    if (!strncmp(r->target,"/api/inventory/",15) || !strncmp(r->target,"/api/operations/",16) || !strncmp(r->target,"/api/incidents/",15)) {
+    if (!strncmp(r->target,"/api/inventory/",15) || !strncmp(r->target,"/api/operations/",16) || !strncmp(r->target,"/api/incidents/",15) || !strncmp(r->target,"/api/mail-templates/",20)) {
         char error[512]="";size_t length=0;int status=400;char *body=NULL;
         if(strcmp(r->method,"GET") && (strncmp(r->content_type,"application/x-www-form-urlencoded",33) || (r->content_type[33] && r->content_type[33]!=';'))) {json_error(fd,400,"Formato della richiesta non valido.");return;}
         if(!strncmp(r->target,"/api/inventory/",15))body=inventory_api(store,r->method,r->target,r->body,r->length,&length,&status,error,sizeof error);
         else if(!strncmp(r->target,"/api/operations/",16))body=operations_api(store,r->method,r->target,r->body,r->length,&length,&status,error,sizeof error);
-        else body=incident_api(store,r->method,r->target,r->body,r->length,&length,&status,error,sizeof error);
+        else if(!strncmp(r->target,"/api/incidents/",15))body=incident_api(store,r->method,r->target,r->body,r->length,&length,&status,error,sizeof error);
+        else body=mail_templates_api(store,r->method,r->target,r->body,r->length,&length,&status,error,sizeof error);
         if(body){response(fd,status,"application/json; charset=utf-8",body,length);free(body);}else json_error(fd,status,error[0]?error:"Richiesta non valida.");return;
     }
     if(!strcmp(r->target,"/api/audit") && !strcmp(r->method,"GET")) {
@@ -786,6 +788,8 @@ static void route(int fd, Store *store, const Request *r, const char *token) {
             response(fd, 200, "text/javascript; charset=utf-8", asset_operations_ui_js, asset_operations_ui_js_size);
         else if (!strcmp(r->target, "/incidents-ui.js"))
             response(fd, 200, "text/javascript; charset=utf-8", asset_incidents_ui_js, asset_incidents_ui_js_size);
+        else if (!strcmp(r->target, "/mail-templates-ui.js"))
+            response(fd, 200, "text/javascript; charset=utf-8", asset_mail_templates_ui_js, asset_mail_templates_ui_js_size);
         else if (!strcmp(r->target, "/i18n.js"))
             response(fd, 200, "text/javascript; charset=utf-8", asset_i18n_js, asset_i18n_js_size);
         else if (!strcmp(r->target, "/i18n-catalogs.js"))

@@ -61,7 +61,7 @@
     if (!value || typeof value !== 'object') return value;
     if (Array.isArray(value)) { value.forEach(item => localizeResponse(item, context)); return value; }
     for (const [key, child] of Object.entries(value)) {
-      if (typeof child === 'string' && (key === 'message' || key === 'error' || key.endsWith('_error') || (key === 'subject' && context === 'outbox'))) value[key] = serverMessage(child);
+      if (typeof child === 'string' && (key === 'message' || key === 'error' || key.endsWith('_error') || (key === 'subject' && context === 'outbox' && !value.template_alert))) value[key] = serverMessage(child);
       else if (child && typeof child === 'object') localizeResponse(child, key);
     }
     return value;

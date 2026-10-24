@@ -183,7 +183,7 @@ def main():
                 database_path.write_bytes(backup.extractfile(names["certificati.db"]).read())
                 connection = sqlite3.connect(f"file:{database_path}?mode=ro", uri=True)
                 try:
-                    require(connection.execute("PRAGMA user_version").fetchone()[0] == 6,
+                    require(connection.execute("PRAGMA user_version").fetchone()[0] == 7,
                             "Container did not initialize the current database schema")
                     require(connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok",
                             "Backed-up database is inconsistent")

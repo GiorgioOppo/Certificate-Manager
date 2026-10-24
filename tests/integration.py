@@ -34,7 +34,7 @@ def command(*args):
 
 
 def remove_workflow_v6(connection):
-    """Remove v6 additions before reconstructing an actual historical schema."""
+    """Remove v6+ additions before reconstructing an actual historical schema."""
     # Triggers on legacy tables reference workflow_audit. Remove them first so
     # historical table rebuilds and inserts are valid without the v6 audit log.
     triggers = connection.execute(
@@ -43,7 +43,8 @@ def remove_workflow_v6(connection):
     for (name,) in triggers:
         connection.execute('DROP TRIGGER "' + name.replace('"', '""') + '"')
     for table in ("inventory_rows", "inventory_batches", "inventory_commits", "event_claims",
-                  "monitor_options", "renewal_closure_reports", "policy_templates", "workflow_audit"):
+                  "monitor_options", "renewal_closure_reports", "policy_templates", "workflow_audit",
+                  "mail_templates", "mail_template_settings"):
         connection.execute(f"DROP TABLE IF EXISTS {table}")
 
 
@@ -329,7 +330,7 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(legacy["chain_status"], "legacy")
         self.assertFalse(legacy["pem_available"])
         self.assertEqual(len(state["notifications"]), 1)
-        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 6)
+        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 7)
         status, _, body = self.upload(self.leaf_old.read_bytes())
         self.assertEqual(status, 200, body)
         cert = self.state()["certificates"][0]
@@ -353,6 +354,10 @@ class ApplicationTests(unittest.TestCase):
         tables = ("certificates", "contacts", "notifications", "outbox")
         previous = {table: self.rows(f"SELECT * FROM {table} ORDER BY rowid") for table in tables}
         self.assertTrue(all(previous[table] for table in tables))
+        # Historical messages have no template metadata; migration adds empty
+        # markers without rebuilding their subject or body.
+        for row in previous["outbox"]:
+            row.update(template_alert="", template_audience="", template_copy=0)
         # Remove later additions to recreate a populated, genuine v2 schema.
         with sqlite3.connect(self.db) as connection:
             remove_workflow_v6(connection)
@@ -373,7 +378,7 @@ class ApplicationTests(unittest.TestCase):
                                "attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',"
                                "created_at INTEGER NOT NULL,sent_at INTEGER,next_attempt INTEGER NOT NULL DEFAULT 0,"
                                "UNIQUE(certificate_id,kind,recipient_email,threshold))")
-            columns = [key for key in previous["outbox"][0] if key != "event_id"]
+            columns = [key for key in previous["outbox"][0] if key not in {"event_id", "template_alert", "template_audience", "template_copy"}]
             column_list = ",".join(columns)
             connection.execute(f"INSERT INTO outbox({column_list}) SELECT {column_list} FROM outbox_v5_fixture")
             connection.execute("DROP TABLE outbox_v5_fixture")
@@ -390,7 +395,7 @@ class ApplicationTests(unittest.TestCase):
             connection.execute("PRAGMA user_version=2")
         self.start_server()
         state = self.state()
-        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 6)
+        self.assertEqual(self.rows("PRAGMA user_version")[0]["user_version"], 7)
         self.assertEqual(state["monitors"], [])
         self.assertEqual(state["monitor_events"], [])
         for table in tables:

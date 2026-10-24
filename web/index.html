@@ -13,6 +13,7 @@
   <script src="/extensions.js" defer></script>
   <script src="/operations-ui.js" defer></script>
   <script src="/incidents-ui.js" defer></script>
+  <script src="/mail-templates-ui.js" defer></script>
 </head>
 <body data-page="overview">
   <a class="skip-link" href="#main"><span data-i18n="m_649b9da29556">Vai al contenuto</span></a>
@@ -187,6 +188,7 @@
           </form>
         </div>
       </details>
+      <details id="mail-templates-panel" class="mail-templates-panel" open><summary><span data-i18n="mailTemplates.title">Template email per avviso e destinatario</span></summary><div id="mail-templates-content" class="mail-templates-content"><p class="workflow-help" data-i18n="mailTemplates.loading">Caricamento dei template…</p></div></details>
       <div id="delivery-banner" class="delivery-banner"><strong id="delivery-status"><span data-i18n="m_d3963e3ab18b">Configurazione email in verifica</span></strong><p id="delivery-description"><span data-i18n="m_e4fbba8b9fa1">I messaggi preparati saranno mostrati qui.</span></p></div>
       <div class="delivery-counts" aria-label="Stato dei messaggi" data-i18n-aria-label="m_cd313e61f2c8"><span><strong id="delivery-pending">0</strong> <span data-i18n="m_dbcc00620ce6">in attesa</span></span><span><strong id="delivery-failed">0</strong> <span data-i18n="m_839cefe10c3e">non riusciti</span></span><span><strong id="delivery-sent">0</strong> <span data-i18n="m_c344be9aac28">inviati</span></span></div>
       <ul id="outbox-list" class="outbox-list"></ul><div id="outbox-empty" class="outbox-empty"><strong><span data-i18n="m_66e6d7f7f797">Nessuna email preparata</span></strong><p><span data-i18n="m_2849af5cc93f">Aggiungi i referenti nei dettagli di un certificato. I promemoria e le distribuzioni compariranno qui.</span></p></div>
