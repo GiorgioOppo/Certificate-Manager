@@ -820,7 +820,12 @@ int delivery_test_connection(const SmtpSettings *settings, char *err, size_t n)
         free(url); curl_global_cleanup();
         return error_message(err, n, "Impossibile inizializzare il client SMTP.");
     }
+    char diagnostics[CURL_ERROR_SIZE] = {0};
     CURLcode result = smtp_options(curl, settings, url, 10L);
+    if (result == CURLE_OK) result = curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, diagnostics);
+    /* Bound each greeting/AUTH response explicitly as well as the complete
+     * connection probe. This never extends the overall ten-second deadline. */
+    if (result == CURLE_OK) result = curl_easy_setopt(curl, CURLOPT_SERVER_RESPONSE_TIMEOUT, 5L);
     /* SMTP greeting, TLS and AUTH are part of connection setup in libcurl.
        No MAIL FROM, recipients or upload is configured for this handle. */
     if (result == CURLE_OK) result = curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 1L);
@@ -828,9 +833,14 @@ int delivery_test_connection(const SmtpSettings *settings, char *err, size_t n)
     long response = 0;
     (void)curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response);
     curl_easy_cleanup(curl); curl_global_cleanup(); free(url);
-    if (result != CURLE_OK)
-        return error_message(err, n, "Connessione SMTP non riuscita: %s (codice %d, risposta %ld).",
-            curl_easy_strerror(result), (int)result, response);
+    if (result != CURLE_OK) {
+        /* Do not expose arbitrary server text or credentials from libcurl's
+         * diagnostic buffer. Report only an allowlisted timeout phase. */
+        const char *phase = strstr(diagnostics, "server response timeout") ? " (attesa risposta SMTP)" :
+            strstr(diagnostics, "Connection timed out") || strstr(diagnostics, "Connection timeout") ? " (connessione)" : "";
+        return error_message(err, n, "Connessione SMTP non riuscita: %s%s (codice %d, risposta %ld).",
+            curl_easy_strerror(result), phase, (int)result, response);
+    }
     return 1;
 }
 
